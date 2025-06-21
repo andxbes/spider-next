@@ -24,7 +24,9 @@ function getMetadataDbConnection() {
 
     // Если нет или закрыто, создаем новое
     try {
-        metadataDbInstance = new Database(metadataPath, { verbose: console.log });
+        metadataDbInstance = new Database(metadataPath, {
+            // verbose: console.log 
+        });
         // Убеждаемся, что таблица существует в этой конкретной базе данных
         metadataDbInstance.exec(`
             CREATE TABLE IF NOT EXISTS sites_metadata (
@@ -76,7 +78,9 @@ function initSiteDb(siteName, overwrite = false) { // Переименовано
         siteDbInstance = null;
     }
 
-    siteDbInstance = new Database(dbPath, { verbose: console.log });
+    siteDbInstance = new Database(dbPath, {
+        // verbose: console.log 
+    });
 
     // ВНИМАНИЕ: Таблица sites_metadata удалена отсюда!
     siteDbInstance.exec(`
@@ -180,7 +184,10 @@ function getAllPagesData(dbName) { // Переименована из getPageDat
     // Открываем новое соединение только для чтения
     let localSiteDb;
     try {
-        localSiteDb = new Database(dbPath, { readonly: true, verbose: console.log });
+        localSiteDb = new Database(dbPath, {
+            readonly: true,
+            // verbose: console.log 
+        });
         const pagesStmt = localSiteDb.prepare('SELECT id, url, metaTitle, metaDescription, scannedAt, contentType, responseStatus, responseTime FROM pages ORDER BY url');
         const pages = pagesStmt.all();
 
@@ -198,7 +205,7 @@ function getAllPagesData(dbName) { // Переименована из getPageDat
                 incomingLinks,
             };
         });
-        console.log(`[DB] Получено ${pagesWithDetails.length} страниц из ${dbName}.db`);
+        // console.log(`[DB] Получено ${pagesWithDetails.length} страниц из ${dbName}.db`);
         return pagesWithDetails;
 
     } catch (error) {

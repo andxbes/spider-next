@@ -237,7 +237,7 @@ export default function ResultsPage() {
                         ))}
                     </ul>
                 ) : (
-                    <p>Нет данных для отображения.</p>
+                    <p>Нет да нных для отображения.</p>
                 )}
             </Modal>
         </div>
