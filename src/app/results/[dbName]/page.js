@@ -163,7 +163,7 @@ export default function ResultsPage() {
                             </th>
                             {/* Изменяем заголовки для модального окна */}
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Заголовки (H1-H6)
+                                H1-H6
                             </th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Входящие ссылки
@@ -173,7 +173,7 @@ export default function ResultsPage() {
                     <tbody className="bg-white divide-y divide-gray-200">
                         {sortedPages.map((page) => (
                             <tr key={page.id}>
-                                <td className="px-6 py-4 whitespace-normal text-sm font-medium text-blue-600 hover:underline break-words">
+                                <td className="px-6 py-4 whitespace-normal text-sm font-medium text-blue-600 hover:underline break-words max-w-[300px]">
                                     <a href={page.url} target="_blank" rel="noopener noreferrer">
                                         {page.url}
                                     </a>
