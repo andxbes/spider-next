@@ -3,8 +3,11 @@ import { getAllPages } from '@/spider/db';
 import { NextResponse } from 'next/server';
 
 
-export async function GET(req, { params }) {
-    const { dbName } = params; // Получаем динамический параметр из URL
+// Изменения здесь:
+export async function GET(req, context) {
+
+    const resolvedParams = await context.params;
+    const { dbName } = resolvedParams; // Получаем dbName из разрешенного объекта
 
     if (!dbName) {
         return NextResponse.json({ message: 'dbName обязателен' }, { status: 400 });
