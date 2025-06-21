@@ -7,7 +7,11 @@ const Modal = ({ isOpen, onClose, title, children }) => {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex justify-center items-center z-50">
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex justify-center items-center z-50" onClick={(e) => {
+            if (e.currentTarget === e.target) {
+                onClose();
+            }
+        }}>
             <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md md:max-w-lg lg:max-w-xl max-h-[90vh] overflow-y-auto transform transition-all sm:my-8 sm:align-middle sm:w-full">
                 <div className="flex justify-between items-center border-b pb-3 mb-4">
                     <h2 className="text-xl font-semibold text-gray-800">{title}</h2>
