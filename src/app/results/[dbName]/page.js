@@ -99,7 +99,7 @@ export default function ResultsPage() {
     if (loading) {
         return (
             <div className="container mx-auto p-4 text-center">
-                <p className="text-xl text-gray-700">Загрузка данных...</p>
+                <p className="text-xl text-gray-100">Загрузка данных...</p>
             </div>
         );
     }

@@ -35,7 +35,6 @@ function getMetadataDbConnection() {
                 status TEXT DEFAULT 'pending' -- pending, completed, error
             );
         `);
-        console.log("[DB] Соединение с базой данных метаданных установлено и таблица обеспечена.");
         return metadataDbInstance;
     } catch (error) {
         console.error("[DB] Ошибка при инициализации базы данных метаданных:", error);
