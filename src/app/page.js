@@ -154,7 +154,7 @@ export default function HomePage() {
 
   return (
     <div className="container mx-auto p-4 max-w-4xl font-sans">
-      <h1 className="text-4xl font-extrabold mb-8 text-center text-gray-800">
+      <h1 className="text-4xl font-extrabold mb-8 text-center text-gray-100">
         Интерфейс Веб-Спайдера
       </h1>
 
@@ -174,7 +174,7 @@ export default function HomePage() {
             <input
               type="url"
               id="url"
-              className="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 focus:ring-blue-500 focus:border-blue-500 text-base transition duration-150 ease-in-out"
+              className="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 text-gray-700 focus:ring-blue-500 focus:border-blue-500 text-base transition duration-150 ease-in-out"
               placeholder="https://ваш-сайт.com"
               value={url}
               onChange={(e) => setUrl(e.target.value)}

@@ -115,7 +115,7 @@ export default function ResultsPage() {
     if (pages.length === 0) {
         return (
             <div className="container mx-auto p-4 text-center">
-                <h1 className="text-3xl font-bold mb-6 text-gray-800">Результаты для "{dbName}"</h1>
+                <h1 className="text-3xl font-bold mb-6 text-gray-800">Результаты для &quot;{dbName}&quot;</h1>
                 <p className="text-xl text-gray-600">Страницы не найдены для этого домена.</p>
             </div>
         );
@@ -123,8 +123,8 @@ export default function ResultsPage() {
 
     return (
         <div className="container mx-auto p-4 max-w-full font-sans">
-            <h1 className="text-4xl font-extrabold mb-8 text-center text-gray-800">
-                Результаты сканирования для "{dbName}"
+            <h1 className="text-4xl font-extrabold mb-8 text-center text-gray-100">
+                Результаты сканирования для &quot;{dbName}&quot;
             </h1>
 
             <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100 overflow-x-auto">
