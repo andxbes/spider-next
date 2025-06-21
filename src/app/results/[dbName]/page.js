@@ -2,94 +2,100 @@
 "use client"; // Это Client Component
 
 import { useState, useEffect, useMemo } from 'react';
-import { useParams } from 'next/navigation'; // Для App Router
+import { useParams } from 'next/navigation';
+import Modal from '@/components/Modal'; // Импортируем компонент модального окна
 
 export default function ResultsPage() {
     const params = useParams();
-    const dbName = params.dbName; // Получаем dbName из параметров маршрута
+    const dbName = params.dbName;
 
     const [pages, setPages] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [sortConfig, setSortConfig] = useState({ key: null, direction: 'ascending' });
 
-    // Эффект для загрузки данных при монтировании компонента или изменении dbName
+    // Состояние для модального окна
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [modalContent, setModalContent] = useState({ title: '', data: [] });
+
     useEffect(() => {
-        if (!dbName) return; // Не выполняем запрос, если dbName не определен
+        if (!dbName) return;
 
         const fetchData = async () => {
-            setLoading(true); // Устанавливаем состояние загрузки
-            setError(null);   // Сбрасываем предыдущие ошибки
+            setLoading(true);
+            setError(null);
             try {
-                // Запрашиваем данные из вашего нового API-эндпоинта
                 const res = await fetch(`/api/data/${dbName}`);
                 if (!res.ok) {
-                    // Обработка ошибок HTTP (например, 404, 500)
                     throw new Error(`HTTP ошибка! Статус: ${res.status}`);
                 }
                 const data = await res.json();
-                setPages(data); // Обновляем состояние страниц
+                setPages(data);
             } catch (err) {
                 console.error("Не удалось загрузить данные страниц:", err);
-                setError("Не удалось загрузить данные страниц: " + err.message); // Сохраняем сообщение об ошибке
+                setError("Не удалось загрузить данные страниц: " + err.message);
             } finally {
-                setLoading(false); // Завершаем состояние загрузки
+                setLoading(false);
             }
         };
 
-        fetchData(); // Вызываем функцию загрузки данных
-    }, [dbName]); // Зависимости эффекта: перезапускать при изменении dbName
+        fetchData();
+    }, [dbName]);
 
-    // Мемоизированный список страниц для сортировки
     const sortedPages = useMemo(() => {
-        let sortableItems = [...pages]; // Создаем копию для сортировки
+        let sortableItems = [...pages];
         if (sortConfig.key !== null) {
             sortableItems.sort((a, b) => {
                 let aValue = a[sortConfig.key];
                 let bValue = b[sortConfig.key];
 
-                // Обработка null/undefined значений для сортировки (помещаем их в конец)
                 if (aValue === null || aValue === undefined) aValue = '';
                 if (bValue === null || bValue === undefined) bValue = '';
 
-                // Сравнение строк
                 if (typeof aValue === 'string' && typeof bValue === 'string') {
                     return sortConfig.direction === 'ascending'
                         ? aValue.localeCompare(bValue)
                         : bValue.localeCompare(aValue);
                 }
-                // Сравнение чисел или других сравнимых типов
                 if (aValue < bValue) {
                     return sortConfig.direction === 'ascending' ? -1 : 1;
                 }
                 if (aValue > bValue) {
                     return sortConfig.direction === 'ascending' ? 1 : -1;
                 }
-                return 0; // Элементы равны
+                return 0;
             });
         }
         return sortableItems;
-    }, [pages, sortConfig]); // Зависимости useMemo
+    }, [pages, sortConfig]);
 
-    // Обработчик для изменения конфигурации сортировки
     const handleSort = (key) => {
         let direction = 'ascending';
-        // Если уже сортируем по этому ключу и направление восходящее, меняем на нисходящее
         if (sortConfig.key === key && sortConfig.direction === 'ascending') {
             direction = 'descending';
         }
-        setSortConfig({ key, direction }); // Обновляем конфигурацию сортировки
+        setSortConfig({ key, direction });
     };
 
-    // Вспомогательная функция для отображения индикатора сортировки
     const getSortIndicator = (key) => {
         if (sortConfig.key === key) {
-            return sortConfig.direction === 'ascending' ? ' ▲' : ' ▼'; // Стрелка вверх/вниз
+            return sortConfig.direction === 'ascending' ? ' ▲' : ' ▼';
         }
-        return ''; // Нет индикатора
+        return '';
     };
 
-    // Отображение состояния загрузки
+    // Функция для открытия модального окна
+    const openModal = (title, data) => {
+        setModalContent({ title, data });
+        setIsModalOpen(true);
+    };
+
+    // Функция для закрытия модального окна
+    const closeModal = () => {
+        setIsModalOpen(false);
+        setModalContent({ title: '', data: [] }); // Очищаем содержимое при закрытии
+    };
+
     if (loading) {
         return (
             <div className="container mx-auto p-4 text-center">
@@ -98,7 +104,6 @@ export default function ResultsPage() {
         );
     }
 
-    // Отображение состояния ошибки
     if (error) {
         return (
             <div className="container mx-auto p-4 text-center text-red-600">
@@ -107,7 +112,6 @@ export default function ResultsPage() {
         );
     }
 
-    // Если данные загружены, но страниц нет
     if (pages.length === 0) {
         return (
             <div className="container mx-auto p-4 text-center">
@@ -117,18 +121,16 @@ export default function ResultsPage() {
         );
     }
 
-    // Основное отображение таблицы результатов
     return (
-        <div className="container mx-auto p-4 max-w-7xl font-sans">
+        <div className="container mx-auto p-4 max-w-full font-sans">
             <h1 className="text-4xl font-extrabold mb-8 text-center text-gray-800">
                 Результаты сканирования для "{dbName}"
             </h1>
 
             <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100 overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
+                <table className="min-w-max divide-y divide-gray-200">
                     <thead className="bg-gray-50">
                         <tr>
-                            {/* Заголовки таблицы с возможностью сортировки */}
                             <th
                                 className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                                 onClick={() => handleSort('url')}
@@ -159,7 +161,7 @@ export default function ResultsPage() {
                             >
                                 Время ответа (мс) {getSortIndicator('responseTime')}
                             </th>
-                            {/* Заголовки без сортировки */}
+                            {/* Изменяем заголовки для модального окна */}
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Заголовки (H1-H6)
                             </th>
@@ -171,16 +173,16 @@ export default function ResultsPage() {
                     <tbody className="bg-white divide-y divide-gray-200">
                         {sortedPages.map((page) => (
                             <tr key={page.id}>
-                                <td className="px-6 py-4 whitespace-normal text-sm font-medium text-blue-600 hover:underline">
+                                <td className="px-6 py-4 whitespace-normal text-sm font-medium text-blue-600 hover:underline break-words">
                                     <a href={page.url} target="_blank" rel="noopener noreferrer">
                                         {page.url}
                                     </a>
                                 </td>
-                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
-                                    {page.metaTitle || 'N/A'} {/* Если заголовок пуст, отображаем 'N/A' */}
+                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800 break-words max-w-xs">
+                                    {page.metaTitle || 'N/A'}
                                 </td>
-                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
-                                    {page.metaDescription || 'N/A'} {/* Если описание пусто, отображаем 'N/A' */}
+                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800 break-words max-w-xs">
+                                    {page.metaDescription || 'N/A'}
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">
                                     {page.responseStatus !== null ? page.responseStatus : 'N/A'}
@@ -188,28 +190,26 @@ export default function ResultsPage() {
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">
                                     {page.responseTime !== null ? page.responseTime : 'N/A'}
                                 </td>
+                                {/* Кнопка для Заголовков */}
                                 <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
                                     {page.headers && page.headers.length > 0 ? (
-                                        <ul className="list-disc list-inside">
-                                            {page.headers.map((h, i) => (
-                                                <li key={i}>
-                                                    <span className="font-semibold">{h.type.toUpperCase()}:</span> {h.value}
-                                                </li>
-                                            ))}
-                                        </ul>
+                                        <button
+                                            onClick={() => openModal('Заголовки (H1-H6)', page.headers.map(h => ({ type: h.type.toUpperCase(), value: h.value })))}
+                                            className="text-blue-600 hover:underline text-sm"
+                                        >
+                                            Посмотреть ({page.headers.length})
+                                        </button>
                                     ) : 'Нет'}
                                 </td>
+                                {/* Кнопка для Входящих ссылок */}
                                 <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
                                     {page.incomingLinks && page.incomingLinks.length > 0 ? (
-                                        <ul className="list-disc list-inside">
-                                            {page.incomingLinks.map((link, i) => (
-                                                <li key={i} className="break-all">
-                                                    <a href={link} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
-                                                        {link}
-                                                    </a>
-                                                </li>
-                                            ))}
-                                        </ul>
+                                        <button
+                                            onClick={() => openModal('Входящие ссылки', page.incomingLinks)}
+                                            className="text-blue-600 hover:underline text-sm"
+                                        >
+                                            Посмотреть ({page.incomingLinks.length})
+                                        </button>
                                     ) : 'Нет'}
                                 </td>
                             </tr>
@@ -217,6 +217,29 @@ export default function ResultsPage() {
                     </tbody>
                 </table>
             </div>
+
+            {/* Компонент модального окна */}
+            <Modal isOpen={isModalOpen} onClose={closeModal} title={modalContent.title}>
+                {modalContent.data && modalContent.data.length > 0 ? (
+                    <ul className="list-disc list-inside space-y-1">
+                        {modalContent.data.map((item, index) => (
+                            <li key={index} className="break-all">
+                                {typeof item === 'object' && item !== null ? (
+                                    <>
+                                        <span className="font-semibold">{item.type}:</span> {item.value}
+                                    </>
+                                ) : (
+                                    <a href={item} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                                        {item}
+                                    </a>
+                                )}
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p>Нет данных для отображения.</p>
+                )}
+            </Modal>
         </div>
     );
 }
