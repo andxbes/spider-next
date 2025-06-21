@@ -1,299 +1,274 @@
-// spider/index.js - Основной скрипт спайдера
+// src/spider/index.js
 const cheerio = require('cheerio');
-const RobotsParser = require('robots-parser');
-const { parseString } = require('xml2js');
+const robots = require('robots-parser');
 const { URL } = require('url');
 const { initDb, savePageData, saveHeader, saveIncomingLink } = require('./db');
+const { parentPort } = require('worker_threads');
 
-// Аргументы, передаваемые из родительского процесса (Next.js API):
-// process.argv[2] = URL для сканирования (строка)
-// process.argv[3] = Флаг перезаписи базы данных ('true' или 'false')
-const inputUrl = process.argv[2];
-const overwriteDb = process.argv[3] === 'true'; // Конвертируем строку 'true'/'false' в boolean
-
-// Валидация входных данных
-if (!inputUrl) {
-    console.error('[SPIDER] Не указан URL для сканирования. Завершение работы.');
-    process.exit(1);
+// Проверяем версию Node.js для определения, нужен ли node-fetch
+let fetch;
+if (parseFloat(process.versions.node) < 18) {
+    // Для Node.js < 18 требуется явный импорт node-fetch
+    // Убедитесь, что 'node-fetch' установлен: npm install node-fetch
+    fetch = require('node-fetch');
+    console.log("[SPIDER_INIT] Using node-fetch for Node.js < 18.");
+} else {
+    // В Node.js 18+ fetch глобально доступен
+    fetch = global.fetch;
+    console.log("[SPIDER_INIT] Using built-in fetch for Node.js >= 18.");
 }
 
-let startUrl;
-let domain;
-try {
-    const parsedInputUrl = new URL(inputUrl);
-    startUrl = parsedInputUrl.origin; // Например, https://example.com
-    domain = parsedInputUrl.hostname; // Например, example.com
-} catch (error) {
-    console.error(`[SPIDER] Некорректный формат URL: ${inputUrl}. Завершение работы.`, error);
-    process.exit(1);
-}
 
-const dbName = domain; // Имя базы данных будет совпадать с доменным именем
+const userAgent = 'Mozilla/5.0 (compatible; MyAwesomeSpider/1.0; +http://your-spider-website.com)';
+const crawledUrls = new Set();
+const urlsToCrawl = [];
+let baseUrl = '';
+let robotsParser;
+let dbName = '';
+let maxConcurrency = 5; // Количество одновременно сканируемых страниц
+let activeCrawlers = 0;
+let totalUrlsFound = 0; // Для отслеживания общего количества найденных URL
+let processedUrlsCount = 0; // Для отслеживания количества обработанных URL
 
-const visitedUrls = new Set(); // URL, которые уже были посещены
-const urlsToVisit = new Set();  // URL, которые нужно посетить
-const incomingLinksMap = new Map(); // Карта для отслеживания входящих ссылок: {targetUrl: Set<sourceUrl>}
-
-let robots; // Объект для работы с robots.txt
 
 /**
- * Отправляет сообщение о прогрессе родительскому процессу через IPC.
- * @param {string} message - Общее текстовое сообщение о статусе.
- * @param {string|null} [currentUrl=null] - Текущий обрабатываемый URL.
- * @param {number|null} [totalUrls=null] - Общее количество URL в очереди (или приблизительное).
- * @param {number|null} [scannedCount=null] - Количество уже просканированных URL.
- * @param {string} [statusType='progress'] - Тип статуса ('progress', 'completed', 'error').
+ * Загружает страницу и измеряет время ответа.
+ * @param {string} url - URL для загрузки.
+ * @returns {Promise<{html: string|null, responseStatus: number|null, responseTime: number|null, finalUrl: string}>}
  */
-function sendProgress(message, currentUrl = null, totalUrls = null, scannedCount = null, statusType = 'progress') {
-    // Проверяем, есть ли канал IPC. Если скрипт запущен напрямую (без spawn), process.send не существует.
-    if (process.send) {
-        process.send({
-            type: statusType,
-            message,
-            currentUrl,
-            totalUrls,
-            scannedCount,
-            dbName // Включаем dbName для идентификации статуса на стороне API
-        });
-    } else {
-        console.log(`[SPIDER_LOG] ${message} - ${currentUrl || ''} (${scannedCount || 0}/${totalUrls || 0})`);
-    }
-}
+async function fetchPage(url) {
+    let responseStatus = null;
+    let responseTime = null; // Время ответа в миллисекундах
+    let html = null;
+    let finalUrl = url; // Конечный URL после возможных редиректов
 
-/**
- * Загружает и парсит файл robots.txt для целевого домена.
- */
-async function fetchRobotsTxt() {
+    const start = Date.now();
     try {
-        const robotsTxtUrl = `${startUrl}/robots.txt`;
-        sendProgress(`Загрузка robots.txt с: ${robotsTxtUrl}`);
-        const response = await fetch(robotsTxtUrl);
-        if (!response.ok) {
-            console.warn(`[SPIDER] Не удалось загрузить robots.txt (${response.statusText}). Продолжаем без него.`);
-            robots = new RobotsParser(robotsTxtUrl, ''); // Создаем пустой парсер, если файл не найден
-            return;
-        }
-        const text = await response.text();
-        robots = new RobotsParser(robotsTxtUrl, text);
-        sendProgress('robots.txt загружен и проанализирован.');
-    } catch (error) {
-        console.error(`[SPIDER] Ошибка при загрузке или парсинге robots.txt: ${error.message}`);
-        robots = new RobotsParser(`${startUrl}/robots.txt`, ''); // Создаем пустой парсер в случае ошибки
-    }
-}
-
-/**
- * Загружает и парсит файл sitemap.xml для целевого домена.
- * Добавляет найденные URL в очередь для сканирования, если они внутренние и разрешены robots.txt.
- */
-async function fetchSitemapXml() {
-    try {
-        const sitemapUrl = `${startUrl}/sitemap.xml`;
-        sendProgress(`Загрузка sitemap.xml с: ${sitemapUrl}`);
-        const response = await fetch(sitemapUrl);
-        if (!response.ok) {
-            console.warn(`[SPIDER] Не удалось загрузить sitemap.xml (${response.statusText}). Продолжаем без него.`);
-            return;
-        }
-        const text = await response.text();
-        await new Promise((resolve, reject) => {
-            parseString(text, (err, result) => {
-                if (err) {
-                    console.error(`[SPIDER] Ошибка при парсинге sitemap.xml: ${err.message}`);
-                    return reject(err);
-                }
-                if (result && result.urlset && result.urlset.url) {
-                    result.urlset.url.forEach(entry => {
-                        const url = entry.loc[0];
-                        // Проверяем, является ли URL внутренним и разрешен ли robots.txt
-                        if (isInternalUrl(url) && (robots ? robots.isAllowed(url, 'User-agent') : true)) {
-                            urlsToVisit.add(url);
-                        }
-                    });
-                    sendProgress(`Добавлено ${result.urlset.url.length} URL из sitemap.xml в очередь.`);
-                }
-                resolve();
-            });
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': userAgent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'keep-alive',
+            },
+            redirect: 'follow', // Следовать редиректам
         });
-    } catch (error) {
-        console.error(`[SPIDER] Ошибка при загрузке или парсинге sitemap.xml: ${error.message}`);
-    }
-}
+        responseTime = Date.now() - start; // Измеряем время ответа
 
-/**
- * Проверяет, принадлежит ли URL текущему домену.
- * @param {string} url - URL для проверки.
- * @returns {boolean} True, если URL является внутренним, иначе False.
- */
-function isInternalUrl(url) {
-    try {
-        const parsedUrl = new URL(url);
-        return parsedUrl.hostname === domain;
-    } catch (e) {
-        // console.warn(`[SPIDER] Некорректный URL при проверке isInternalUrl: ${url}`);
-        return false;
-    }
-}
+        responseStatus = response.status;
+        finalUrl = response.url; // Получаем конечный URL после редиректов
 
-/**
- * Сканирует одну страницу: загружает, парсит HTML, извлекает данные и ссылки.
- * @param {string} url - URL страницы для сканирования.
- * @param {string|null} [sourcePageUrl=null] - URL страницы, с которой была найдена текущая ссылка (для входящих ссылок).
- */
-async function crawlPage(url, sourcePageUrl = null) {
-    // Проверяем, был ли URL уже посещен, является ли он внешним, или запрещен ли robots.txt
-    if (visitedUrls.has(url) || !isInternalUrl(url) || (robots && !robots.isAllowed(url, 'User-agent'))) {
-        return; // Пропускаем URL
-    }
-
-    visitedUrls.add(url); // Отмечаем URL как посещенный
-    urlsToVisit.delete(url); // Удаляем из очереди ожидания, так как он обрабатывается
-
-    try {
-        const response = await fetch(url);
-        if (!response.ok) {
-            console.error(`[SPIDER] Не удалось получить ${url}: ${response.statusText}`);
-            return;
-        }
-
-        const contentType = response.headers.get('content-type');
-        // Пропускаем не-HTML контент (изображения, CSS, JS и т.д.)
-        if (!contentType || !contentType.includes('text/html')) {
-            // console.log(`[SPIDER] Пропуск ${url} из-за не-HTML контента: ${contentType}`);
-            return;
-        }
-
-        const html = await response.text();
-        const $ = cheerio.load(html); // Загружаем HTML в Cheerio для парсинга
-
-        // Извлечение meta title и meta description
-        const metaTitle = $('title').text().trim() || $('meta[property="og:title"]').attr('content')?.trim() || '';
-        const metaDescription = $('meta[name="description"]').attr('content')?.trim() || $('meta[property="og:description"]').attr('content')?.trim() || '';
-
-        // Сохранение данных страницы в БД
-        let pageId;
-        try {
-            pageId = savePageData(url, metaTitle, metaDescription);
-        } catch (dbError) {
-            // Если возникла ошибка, например, из-за дубликата (хотя `INSERT OR IGNORE` должен это обрабатывать)
-            console.error(`[SPIDER] Ошибка при сохранении данных страницы ${url}: ${dbError.message}`);
-            return;
-        }
-
-        // Сохранение входящей ссылки, если она есть
-        if (pageId && sourcePageUrl) {
-            saveIncomingLink(pageId, sourcePageUrl);
-        }
-
-        // Извлечение и сохранение заголовков (H1-H6)
-        $('h1, h2, h3, h4, h5, h6').each((i, el) => {
-            const type = el.tagName.toUpperCase();
-            const value = $(el).text().trim();
-            if (value && pageId) { // Сохраняем только непустые заголовки
-                saveHeader(pageId, type, value);
-            }
-        });
-
-        // Поиск всех ссылок на странице
-        $('a[href]').each((i, el) => {
-            let href = $(el).attr('href');
-            try {
-                // Преобразование относительных URL в абсолютные
-                const absoluteUrl = new URL(href, url).href;
-
-                // Если ссылка внутренняя, еще не посещена и разрешена robots.txt, добавляем в очередь
-                if (isInternalUrl(absoluteUrl) && !visitedUrls.has(absoluteUrl) && (robots ? robots.isAllowed(absoluteUrl, 'User-agent') : true)) {
-                    urlsToVisit.add(absoluteUrl);
-                    // Добавляем текущую страницу как источник для абсолютной ссылки
-                    if (!incomingLinksMap.has(absoluteUrl)) {
-                        incomingLinksMap.set(absoluteUrl, new Set());
-                    }
-                    incomingLinksMap.get(absoluteUrl).add(url);
-                }
-            } catch (e) {
-                // Игнорируем некорректные или непарсибельные URL
-            }
-        });
-
-    } catch (error) {
-        console.error(`[SPIDER] Критическая ошибка при сканировании ${url}: ${error.message}`);
-    }
-}
-
-/**
- * Запускает процесс сканирования.
- */
-async function startSpider() {
-    sendProgress(`Инициализация базы данных для ${dbName}...`);
-    initDb(dbName, overwriteDb); // Инициализация БД (возможно, с перезаписью)
-
-    await fetchRobotsTxt(); // Загрузка robots.txt
-    await fetchSitemapXml(); // Загрузка sitemap.xml
-
-    // Если после загрузки sitemap и robots очередь все еще пуста,
-    // добавляем начальный URL, если он разрешен.
-    if (urlsToVisit.size === 0) {
-        if (robots && robots.isAllowed(startUrl, 'User-agent')) {
-            urlsToVisit.add(startUrl);
-            sendProgress(`Нет URL из sitemap/robots.txt. Начинаем с: ${startUrl}.`);
+        if (response.ok && response.headers.get('content-type')?.includes('text/html')) {
+            html = await response.text();
+            console.log(`[SPIDER_FETCH] Успешно загружен HTML для ${url} (Статус: ${responseStatus}, Время: ${responseTime} мс)`);
         } else {
-            sendProgress("Нет URL для сканирования. Проверьте robots.txt и sitemap.xml или начальный URL.", null, null, null, 'error');
-            process.exit(1); // Выход с ошибкой
+            console.warn(`[SPIDER_FETCH] Не HTML контент или ошибка для ${url}. Статус: ${responseStatus}, Content-Type: ${response.headers.get('content-type') || 'N/A'}`);
+        }
+    } catch (error) {
+        responseTime = Date.now() - start; // Измеряем время даже при ошибке
+        console.error(`[SPIDER_FETCH] Ошибка при загрузке ${url}: ${error.message} (Время: ${responseTime} мс)`);
+        // Устанавливаем статус для сетевых ошибок
+        if (error.code === 'ENOTFOUND') {
+            responseStatus = 0; // Ошибка DNS
+        } else if (error.code === 'ECONNREFUSED') {
+            responseStatus = -2; // Соединение отклонено
+        } else if (error.code === 'ERR_INVALID_URL') {
+            responseStatus = -3; // Некорректный URL
+        }
+        else {
+            responseStatus = -1; // Общая ошибка сети
         }
     }
 
-    // Преобразуем Set в массив, который будет использоваться как очередь
-    const queue = Array.from(urlsToVisit);
-    urlsToVisit.clear(); // Очищаем Set, так как элементы будут добавляться в `queue`
-
-    let scannedCount = 0;
-    const initialTotalUrls = queue.length; // Начальное количество элементов в очереди
-
-    while (queue.length > 0) {
-        const currentUrl = queue.shift(); // Берем первый URL из очереди
-        const sources = incomingLinksMap.has(currentUrl) ? Array.from(incomingLinksMap.get(currentUrl)) : null;
-
-        // Отправляем прогресс родительскому процессу
-        sendProgress(
-            `Сканирование страницы`,
-            currentUrl,
-            initialTotalUrls + urlsToVisit.size, // Общее количество может увеличиваться по мере нахождения новых ссылок
-            ++scannedCount
-        );
-
-        await crawlPage(currentUrl, sources ? sources[0] : null); // Сканируем страницу
-
-        // Добавляем новые URL, найденные во время обхода текущей страницы, в конец очереди
-        // Используем Array.from(urlsToVisit), так как Set urlsToVisit может меняться внутри цикла crawlPage
-        for (const url of Array.from(urlsToVisit)) {
-            if (!visitedUrls.has(url) && !queue.includes(url)) {
-                queue.push(url);
-                urlsToVisit.delete(url); // Удаляем из временного Set после добавления в очередь `queue`
-            }
-        }
-    }
-
-    // Сохраняем все входящие ссылки, которые могли быть собраны, но чьи целевые страницы не были просканированы (например, из-за внешнего домена или robots.txt)
-    for (const [targetUrl, sources] of incomingLinksMap.entries()) {
-        let pageId;
-        try {
-            // Пытаемся сохранить данные страницы, если ее еще нет (только URL)
-            pageId = savePageData(targetUrl, '', '');
-        } catch (dbError) {
-            console.error(`[SPIDER] Ошибка при сохранении целевого URL для входящих ссылок ${targetUrl}: ${dbError.message}`);
-            continue;
-        }
-
-        if (pageId) {
-            for (const sourceUrl of sources) {
-                saveIncomingLink(pageId, sourceUrl);
-            }
-        }
-    }
-
-    sendProgress('Сканирование завершено.', null, null, null, 'completed');
-    process.exit(0); // Нормальное завершение работы
+    return { html, responseStatus, responseTime, finalUrl };
 }
 
-// Запуск спайдера
-startSpider();
+
+/**
+ * Основная функция сканирования.
+ */
+async function crawl() {
+    console.log("[SPIDER_CRAWL] Начинаем основной цикл сканирования...");
+    // Цикл продолжается, пока есть URL-ы для обработки или активные краулеры
+    while (urlsToCrawl.length > 0 || activeCrawlers > 0) {
+        // Запускаем новые краулеры, если есть свободные слоты и URL-ы для обработки
+        if (activeCrawlers < maxConcurrency && urlsToCrawl.length > 0) {
+            const currentUrl = urlsToCrawl.shift(); // Берем URL из очереди
+            // Важно: добавляем currentUrl в crawledUrls сразу, чтобы избежать повторной обработки
+            // если он снова появится в очереди до завершения обработки.
+            crawledUrls.add(currentUrl);
+            activeCrawlers++;
+            processedUrlsCount++; // Увеличиваем счетчик обработанных URL
+
+            // Отправляем прогресс в родительский процесс (API route)
+            if (parentPort) {
+                parentPort.postMessage({
+                    type: 'progress',
+                    dbName: dbName,
+                    message: `Сканирование ${processedUrlsCount} из ${totalUrlsFound} страниц`,
+                    currentUrl: currentUrl,
+                    totalUrls: totalUrlsFound,
+                    scannedCount: processedUrlsCount,
+                });
+            }
+            console.log(`[SPIDER_QUEUE] Обработка: ${currentUrl} (Осталось в очереди: ${urlsToCrawl.length}, Активных: ${activeCrawlers})`);
+
+            // Запускаем асинхронную функцию для обработки текущего URL
+            (async () => {
+                try {
+                    const parsedUrl = new URL(currentUrl);
+                    const domain = parsedUrl.hostname;
+
+                    // Проверяем robots.txt (если он загружен)
+                    if (robotsParser && !robotsParser.isAllowed(currentUrl, userAgent)) {
+                        console.log(`[SPIDER_ROBOTS] ${currentUrl} запрещен robots.txt`);
+                        // Сохраняем запись для запрещенного URL со статусом 0 и временем 0
+                        savePageData(currentUrl, 'Disallowed by robots.txt', null, 'DISALLOWED', 0, 0);
+                        return; // Пропускаем дальнейшую обработку
+                    }
+
+                    const { html, responseStatus, responseTime, finalUrl } = await fetchPage(currentUrl);
+
+                    // Если был редирект, и конечный URL новый, добавляем его в очередь
+                    if (finalUrl !== currentUrl && !crawledUrls.has(finalUrl)) {
+                        console.log(`[SPIDER_REDIRECT] ${currentUrl} редирект на ${finalUrl}`);
+                        crawledUrls.add(finalUrl); // Добавляем конечный URL в обработанные
+                        urlsToCrawl.push(finalUrl); // Добавляем в очередь для обработки
+                        totalUrlsFound++; // Учитываем новый URL
+                    }
+
+                    if (html) {
+                        const $ = cheerio.load(html);
+                        const metaTitle = $('title').text() || $('meta[property="og:title"]').attr('content') || null;
+                        const metaDescription = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || null;
+
+                        const contentType = 'HTML_PAGE'; // Пока всегда HTML_PAGE, можно расширить
+
+                        // Сохраняем данные страницы, включая статус и время ответа
+                        const pageId = savePageData(finalUrl, metaTitle, metaDescription, contentType, responseStatus, responseTime);
+
+                        // Извлечение и сохранение заголовков (H1-H6)
+                        const headers = [];
+                        for (let i = 1; i <= 6; i++) {
+                            $(`h${i}`).each((index, element) => {
+                                const headerText = $(element).text().trim();
+                                if (headerText) { // Сохраняем только непустые заголовки
+                                    headers.push({ type: `h${i}`, value: headerText });
+                                }
+                            });
+                        }
+                        headers.forEach(header => saveHeader(pageId, header.type, header.value));
+
+                        // Извлечение и сохранение ссылок
+                        $('a').each((index, element) => {
+                            const href = $(element).attr('href');
+                            if (href) {
+                                try {
+                                    const absoluteUrl = new URL(href, finalUrl).href;
+                                    const absoluteUrlParsed = new URL(absoluteUrl);
+
+                                    // Проверяем, что ссылка ведет на тот же домен
+                                    if (absoluteUrlParsed.hostname === domain) {
+                                        // Сохраняем входящую ссылку
+                                        saveIncomingLink(pageId, absoluteUrl);
+
+                                        // Добавляем URL в очередь, если он еще не был обработан и не находится в очереди
+                                        if (!crawledUrls.has(absoluteUrl) && !urlsToCrawl.includes(absoluteUrl)) {
+                                            crawledUrls.add(absoluteUrl); // Добавляем в Set, чтобы избежать дубликатов
+                                            urlsToCrawl.push(absoluteUrl); // Добавляем в очередь
+                                            totalUrlsFound++; // Учитываем новый найденный URL
+                                        }
+                                    }
+                                } catch (e) {
+                                    // console.warn(`[SPIDER_LINK] Некорректная ссылка: ${href} на ${currentUrl}`);
+                                }
+                            }
+                        });
+
+                    } else {
+                        // Если HTML не получен (например, ошибка загрузки, не HTML контент)
+                        console.log(`[SPIDER_PROCESS] Сохранение записи для ${currentUrl} без HTML.`);
+                        // Сохраняем запись даже без HTML, чтобы иметь информацию о статусе и времени
+                        savePageData(finalUrl, null, null, 'NON_HTML_OR_ERROR', responseStatus, responseTime);
+                    }
+                } catch (error) {
+                    console.error(`[SPIDER_ERROR] Непредвиденная ошибка при обработке ${currentUrl}: ${error.message}`);
+                    // В случае внутренней ошибки, также сохраняем запись
+                    savePageData(currentUrl, null, null, 'INTERNAL_ERROR', -1, -1); // Статус -1 для внутренних ошибок
+                } finally {
+                    activeCrawlers--; // Уменьшаем счетчик активных краулеров, независимо от исхода
+                }
+            })(); // Конец асинхронной IIFE
+        } else {
+            // Если нет активных краулеров и URL-ов для обработки, выходим из цикла
+            if (urlsToCrawl.length === 0 && activeCrawlers === 0) {
+                break;
+            }
+            // Если нет свободных слотов или URL-ов, ждем немного, чтобы не загружать CPU
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+    }
+    console.log("[SPIDER_CRAWL] Основной цикл сканирования завершен.");
+}
+
+// Запуск спайдера через worker_threads
+if (parentPort) {
+    parentPort.on('message', async (message) => {
+        console.log(`[SPIDER_WORKER] Получено сообщение типа: ${message.type}`);
+        if (message.type === 'start') {
+            const { url, overwrite } = message;
+            baseUrl = url;
+            try {
+                dbName = new URL(baseUrl).hostname;
+            } catch (e) {
+                console.error(`[SPIDER_WORKER] Некорректный базовый URL: ${baseUrl}`, e);
+                if (parentPort) {
+                    parentPort.postMessage({ type: 'error', message: `Некорректный базовый URL: ${baseUrl}` });
+                }
+                return; // Прерываем выполнение, если URL некорректен
+            }
+
+            initDb(dbName, overwrite);
+            console.log(`[SPIDER_WORKER] Сканирование начато для: ${baseUrl}, База данных: ${dbName}`);
+
+            // Получаем и парсим robots.txt
+            try {
+                const robotsTxtUrl = new URL('/robots.txt', baseUrl).href;
+                const robotsTxtRes = await fetch(robotsTxtUrl, {
+                    headers: { 'User-Agent': userAgent }
+                });
+                if (robotsTxtRes.ok) {
+                    const robotsTxtContent = await robotsTxtRes.text();
+                    robotsParser = robots(robotsTxtUrl, robotsTxtContent);
+                    console.log(`[SPIDER_ROBOTS] robots.txt загружен для ${baseUrl}`);
+                } else {
+                    console.warn(`[SPIDER_ROBOTS] robots.txt не найден или ошибка для ${baseUrl}. Статус: ${robotsTxtRes.status}`);
+                    robotsParser = robots(robotsTxtUrl, ''); // Создаем пустой парсер, если robots.txt не найден
+                }
+            } catch (error) {
+                console.error(`[SPIDER_ROBOTS] Ошибка при загрузке robots.txt для ${baseUrl}: ${error.message}`);
+                robotsParser = robots(new URL('/robots.txt', baseUrl).href, ''); // Продолжаем без robots.txt
+            }
+
+            // Инициализация очереди
+            if (!crawledUrls.has(baseUrl)) { // Убедимся, что базовый URL не добавлен дважды
+                crawledUrls.add(baseUrl);
+                urlsToCrawl.push(baseUrl);
+                totalUrlsFound = 1;
+            } else {
+                console.log(`[SPIDER_INIT] Базовый URL ${baseUrl} уже в списке обработанных.`);
+                totalUrlsFound = crawledUrls.size; // Если уже есть, инициализируем по размеру Set
+            }
+
+            await crawl(); // Запускаем основной цикл сканирования
+
+            // Отправляем сообщение о завершении сканирования
+            if (parentPort) {
+                parentPort.postMessage({ type: 'completed', dbName: dbName });
+                console.log(`[SPIDER_WORKER] Сканирование для ${dbName} завершено.`);
+            }
+        }
+    });
+}
+// Нет 'else' блока здесь, чтобы избежать сообщения "Прямой запуск не рекомендуется."
+// Если этот скрипт запускается не как воркер, он просто ничего не делает.

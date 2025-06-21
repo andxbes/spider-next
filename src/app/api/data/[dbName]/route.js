@@ -1,23 +1,20 @@
 // src/app/api/data/[dbName]/route.js
-import { getAllPages } from '@/spider/db';
 import { NextResponse } from 'next/server';
+import { getAllPages } from '@/spider/db'; // Импортируем новую функцию getAllPages
 
-
-// Изменения здесь:
-export async function GET(req, context) {
-
-    const resolvedParams = await context.params;
-    const { dbName } = resolvedParams; // Получаем dbName из разрешенного объекта
+export async function GET(req, { params }) {
+    const { dbName } = params; // Получаем dbName из параметров динамического маршрута
 
     if (!dbName) {
-        return NextResponse.json({ message: 'dbName обязателен' }, { status: 400 });
+        return NextResponse.json({ message: 'Database name is required' }, { status: 400 });
     }
 
     try {
+        // Вызываем функцию для получения всех данных страниц для указанной базы данных
         const pages = getAllPages(dbName);
-        return NextResponse.json(pages, { status: 200 });
+        return NextResponse.json(pages);
     } catch (error) {
-        console.error(`[API] Ошибка при получении данных для ${dbName}:`, error);
-        return NextResponse.json({ message: 'Не удалось получить данные.', error: error.message }, { status: 500 });
+        console.error(`Ошибка при получении данных для ${dbName}:`, error);
+        return NextResponse.json({ message: 'Не удалось получить данные', error: error.message }, { status: 500 });
     }
 }

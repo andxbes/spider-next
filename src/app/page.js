@@ -9,7 +9,8 @@ export default function HomePage() {
   const [url, setUrl] = useState("");
   const [overwrite, setOverwrite] = useState(false);
   const [scanInProgress, setScanInProgress] = useState(false);
-  const [scanStatus, setScanStatus] = useState(null); // { message, currentUrl, totalUrls, scannedCount }
+  // scanStatus теперь будет объектом, содержащим status, progress (который может быть null), и другие метаданды
+  const [scanStatus, setScanStatus] = useState(null);
   const [scannedSites, setScannedSites] = useState([]); // Список ранее просканированных сайтов
   const [currentDbName, setCurrentDbName] = useState(null); // Имя БД текущего активного сканирования
   const router = useRouter();
@@ -23,10 +24,12 @@ export default function HomePage() {
         setScannedSites(data);
 
         // Проверяем, есть ли активное сканирование в списке
-        const runningScan = data.find((site) => site.status === "pending");
+        // `pending` или `scanning` указывают на то, что процесс в работе.
+        const runningScan = data.find((site) => site.status === "pending" || site.status === "scanning");
         if (runningScan) {
           setScanInProgress(true);
           setCurrentDbName(runningScan.dbName);
+          // Здесь не нужно инициализировать scanStatus, он обновится через useEffect
         } else {
           setScanInProgress(false);
           setCurrentDbName(null);
@@ -53,11 +56,16 @@ export default function HomePage() {
     if (scanInProgress && currentDbName) {
       interval = setInterval(async () => {
         try {
-          const res = await fetch(`/api/status?dbName=${currentDbName}`);
+          // Запрос теперь идет на /api/scan, который возвращает и progress, и status
+          const res = await fetch(`/api/scan?dbName=${currentDbName}`);
           if (res.ok) {
             const data = await res.json();
-            setScanStatus(data.progress); // Обновляем прогресс на UI
-            if (data.scanMetadata.status !== "pending") {
+
+            // Здесь data.progress - это объект { message, currentUrl, totalUrls, scannedCount }
+            // data.status - это 'pending', 'scanning', 'completed', 'error'
+            setScanStatus(data); // Сохраняем весь объект, который приходит с сервера
+
+            if (data.status !== "pending" && data.status !== "scanning") {
               // Сканирование завершилось (успешно или с ошибкой)
               setScanInProgress(false);
               setScanStatus(null);
@@ -110,19 +118,16 @@ export default function HomePage() {
         const data = await res.json();
         setCurrentDbName(data.dbName); // Устанавливаем имя БД для отслеживания прогресса
         setScanInProgress(true); // Активируем индикатор прогресса
-        setScanStatus({
-          message: "Начало сканирования...",
-          currentUrl: null,
-          totalUrls: null,
-          scannedCount: null,
+        setScanStatus({ // Инициализируем scanStatus с пустым прогрессом, чтобы избежать ошибки "null.progress"
+          status: 'pending',
+          progress: null, // Изначально progress может быть null
+          message: data.message || "Запуск сканирования...", // Сообщение от API
+          totalUrls: 0, // Устанавливаем начальные значения для прогресс-бара
+          scannedCount: 0,
         });
         setUrl(""); // Очищаем поле ввода
         setOverwrite(false); // Сбрасываем чекбокс
         fetchScannedSites(); // Обновляем список, чтобы показать новый сайт в статусе 'pending'
-      } else if (res.status === 409) {
-        alert(
-          "Другое сканирование уже выполняется. Пожалуйста, дождитесь его завершения."
-        );
       } else {
         const errorData = await res.json();
         alert(`Не удалось начать сканирование: ${errorData.message}`);
@@ -141,6 +146,11 @@ export default function HomePage() {
   const handleViewResults = (dbName) => {
     router.push(`/results/${dbName}`); // Переходим на страницу результатов
   };
+
+  // Вычисляем процент прогресса для индикатора
+  const progressPercentage = (scanStatus?.progress?.scannedCount && scanStatus?.progress?.totalUrls)
+    ? (scanStatus.progress.scannedCount / scanStatus.progress.totalUrls) * 100
+    : 0;
 
   return (
     <div className="container mx-auto p-4 max-w-4xl font-sans">
@@ -205,24 +215,39 @@ export default function HomePage() {
         {scanInProgress && currentDbName && (
           <div className="mt-8 p-6 bg-blue-50 rounded-lg border border-blue-200 animate-fadeIn">
             <h3 className="text-xl font-medium text-blue-800 mb-3">Прогресс сканирования для {currentDbName}</h3>
-            {/* Add optional chaining here */}
-            <p className="text-blue-700 mb-1">Статус: {scanStatus?.message || 'Ожидание...'}</p>
-            {scanStatus?.currentUrl && (
-              <p className="text-blue-700 text-sm break-all mb-1">Текущий URL: <a href={scanStatus.currentUrl} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">{scanStatus.currentUrl}</a></p>
+
+            {/* Исправлено: Проверяем scanStatus и scanStatus.progress */}
+            <p className="text-blue-700 mb-1">
+              Статус: {scanStatus?.progress?.message || scanStatus?.message || 'Ожидание первого ответа...'}
+            </p>
+
+            {/* Оборачиваем весь блок, зависящий от progress, в проверку */}
+            {scanStatus?.progress ? (
+              <>
+                {scanStatus.progress.currentUrl && (
+                  <p className="text-blue-700 text-sm break-all mb-1">
+                    Текущий URL: <a href={scanStatus.progress.currentUrl} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">{scanStatus.progress.currentUrl}</a>
+                  </p>
+                )}
+
+                {scanStatus.progress.scannedCount !== null && scanStatus.progress.totalUrls !== null && (
+                  <p className="text-blue-700">
+                    Просканировано: {scanStatus.progress.scannedCount} / {scanStatus.progress.totalUrls}
+                  </p>
+                )}
+                <div className="w-full bg-gray-200 rounded-full h-3 mt-3">
+                  <div
+                    className="bg-blue-600 h-3 rounded-full transition-all duration-500 ease-out"
+                    style={{ width: `${progressPercentage}%` }}
+                  ></div>
+                </div>
+              </>
+            ) : (
+              // Сообщение, когда прогресс-объект еще не пришел, но сканирование pending/scanning
+              (scanStatus?.status === 'pending' || scanStatus?.status === 'scanning') && (
+                <p className="text-blue-700">Ожидание данных о прогрессе от сканера...</p>
+              )
             )}
-            {/* Add optional chaining here */}
-            {scanStatus?.scannedCount !== null && scanStatus?.totalUrls !== null && (
-              <p className="text-blue-700">
-                Просканировано: {scanStatus.scannedCount} / {scanStatus.totalUrls}
-              </p>
-            )}
-            <div className="w-full bg-gray-200 rounded-full h-3 mt-3">
-              <div
-                className="bg-blue-600 h-3 rounded-full transition-all duration-500 ease-out"
-                // Add optional chaining here for safety
-                style={{ width: `${(scanStatus?.scannedCount / scanStatus?.totalUrls) * 100 || 0}%` }}
-              ></div>
-            </div>
           </div>
         )}
       </div>
@@ -253,6 +278,11 @@ export default function HomePage() {
                       ({new Date(site.scannedAt).toLocaleString()})
                     </span>
                     {site.status === "pending" && (
+                      <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-blue-700 bg-blue-100 rounded-full">
+                        Сканирование...
+                      </span>
+                    )}
+                    {site.status === "scanning" && ( // Добавляем статус "scanning"
                       <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-blue-700 bg-blue-100 rounded-full">
                         Сканирование...
                       </span>

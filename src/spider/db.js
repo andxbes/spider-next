@@ -1,174 +1,226 @@
-// spider/db.js
+// src/spider/db.js
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-let dbInstance = null; // Переменная для хранения активного экземпляра базы данных
+let siteDbInstance = null; // Для баз данных конкретных сайтов (pages, headers, links)
+let metadataDbInstance = null; // Для общей базы данных sites_metadata.db
 
-/**
- * Получает путь к файлу базы данных на основе имени сайта.
- * БД будут храниться в подпапке 'databases' в корне проекта.
- * @param {string} siteName - Имя сайта (домен).
- * @returns {string} Полный путь к файлу базы данных.
- */
-function getDbPath(siteName) {
-    const safeSiteName = siteName.replace(/[^a-zA-Z0-9_.-]/g, '_'); // Очищаем имя для безопасного использования в пути к файлу
-    // process.cwd() возвращает текущую рабочую директорию, т.е. корень Next.js проекта
-    return path.resolve(process.cwd(), 'databases', `${safeSiteName}.db`);
-}
+const METADATA_DB_FILE_NAME = 'sites_metadata.db';
 
-/**
- * Инициализирует базу данных для заданного сайта.
- * Если overwrite true и файл существует, он будет удален.
- * @param {string} siteName - Имя сайта (домен), для которого создается/открывается БД.
- * @param {boolean} [overwrite=false] - Если true, удаляет существующую БД перед созданием новой.
- */
-function initDb(siteName, overwrite = false) {
+// --- Функции для общей базы данных метаданных ---
+function getMetadataDbConnection() {
     const dbDir = path.resolve(process.cwd(), 'databases');
-    // Создаем папку 'databases', если она не существует
     if (!fs.existsSync(dbDir)) {
         fs.mkdirSync(dbDir, { recursive: true });
     }
 
-    const dbPath = getDbPath(siteName);
+    const metadataPath = path.resolve(dbDir, METADATA_DB_FILE_NAME);
+
+    // Проверяем, существует ли экземпляр и открыт ли он
+    if (metadataDbInstance && metadataDbInstance.open) {
+        return metadataDbInstance; // Возвращаем существующее открытое соединение
+    }
+
+    // Если нет или закрыто, создаем новое
+    try {
+        metadataDbInstance = new Database(metadataPath, { verbose: console.log });
+        // Убеждаемся, что таблица существует в этой конкретной базе данных
+        metadataDbInstance.exec(`
+            CREATE TABLE IF NOT EXISTS sites_metadata (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dbName TEXT UNIQUE NOT NULL,
+                domain TEXT NOT NULL,
+                scannedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'pending' -- pending, completed, error
+            );
+        `);
+        console.log("[DB] Соединение с базой данных метаданных установлено и таблица обеспечена.");
+        return metadataDbInstance;
+    } catch (error) {
+        console.error("[DB] Ошибка при инициализации базы данных метаданных:", error);
+        metadataDbInstance = null; // Устанавливаем в null в случае ошибки
+        throw error; // Перебрасываем ошибку для индикации сбоя
+    }
+}
+
+// Автоматически инициализируем базу данных метаданных при импорте этого модуля
+try {
+    getMetadataDbConnection();
+} catch (e) {
+    console.error("Не удалось инициализировать базу данных метаданных при загрузке модуля:", e);
+}
+
+
+// --- Функции для отдельных баз данных сайтов ---
+function getSiteDbPath(siteName) {
+    const safeSiteName = siteName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    return path.resolve(process.cwd(), 'databases', `${safeSiteName}.db`);
+}
+
+function initSiteDb(siteName, overwrite = false) { // Переименовано из initDb
+    const dbDir = path.resolve(process.cwd(), 'databases');
+    if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+    }
+
+    const dbPath = getSiteDbPath(siteName);
 
     if (overwrite && fs.existsSync(dbPath)) {
-        console.log(`[DB] Удаление существующей базы данных: ${dbPath}`);
-        fs.unlinkSync(dbPath); // Удаляем файл базы данных
+        console.log(`[DB] Удаление существующей базы данных сайта: ${dbPath}`);
+        fs.unlinkSync(dbPath);
     }
 
-    // Если база данных уже открыта (например, для другого сайта), закрываем её
-    if (dbInstance) {
-        dbInstance.close();
-        dbInstance = null; // Сбрасываем экземпляр
+    // Закрываем предыдущий экземпляр базы данных сайта, если он был открыт
+    if (siteDbInstance && siteDbInstance.open) {
+        siteDbInstance.close();
+        siteDbInstance = null;
     }
 
-    // Открываем или создаем новую базу данных
-    dbInstance = new Database(dbPath, { verbose: console.log }); // verbose для отладки вывода в консоль
+    siteDbInstance = new Database(dbPath, { verbose: console.log });
 
-    // Создание таблиц, если они не существуют
-    dbInstance.exec(`
+    // ВНИМАНИЕ: Таблица sites_metadata удалена отсюда!
+    siteDbInstance.exec(`
         CREATE TABLE IF NOT EXISTS pages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             url TEXT UNIQUE NOT NULL,
             metaTitle TEXT,
             metaDescription TEXT,
-            scannedAt DATETIME DEFAULT CURRENT_TIMESTAMP -- Автоматическая отметка времени сканирования
+            scannedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+            contentType TEXT DEFAULT 'HTML_PAGE',
+            responseStatus INTEGER,   -- HTTP статус код
+            responseTime INTEGER      -- Время ответа в мс
         );
 
         CREATE TABLE IF NOT EXISTS headers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pageId INTEGER,
-            type TEXT NOT NULL, -- например, H1, H2, H3
+            type TEXT NOT NULL,
             value TEXT NOT NULL,
-            FOREIGN KEY (pageId) REFERENCES pages(id) ON DELETE CASCADE -- Удаляем заголовки при удалении страницы
+            FOREIGN KEY (pageId) REFERENCES pages(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS incoming_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pageId INTEGER,
-            sourceUrl TEXT NOT NULL, -- URL страницы, откуда идет ссылка на данную страницу
+            sourceUrl TEXT NOT NULL,
             FOREIGN KEY (pageId) REFERENCES pages(id) ON DELETE CASCADE
         );
     `);
-    console.log(`[DB] База данных для ${siteName} инициализирована по адресу ${dbPath}.`);
+    console.log(`[DB] База данных сайта для ${siteName} инициализирована.`);
+    return siteDbInstance; // Возвращаем новый экземпляр
 }
 
-/**
- * Сохраняет данные страницы в базу данных.
- * Использует INSERT OR IGNORE, чтобы избежать дубликатов по URL.
- * @param {string} url - URL страницы.
- * @param {string} metaTitle - Мета-заголовок страницы.
- * @param {string} metaDescription - Мета-описание страницы.
- * @returns {number} ID вставленной или существующей страницы.
- */
-function savePageData(url, metaTitle, metaDescription) {
-    if (!dbInstance) {
-        throw new Error("База данных не инициализирована. Вызовите initDb() сначала.");
+function savePageData(url, metaTitle, metaDescription, contentType, responseStatus, responseTime) {
+    if (!siteDbInstance) {
+        console.error("База данных сайта не инициализирована. Невозможно сохранить данные страницы.");
+        return null;
     }
-    const stmt = dbInstance.prepare('INSERT OR IGNORE INTO pages (url, metaTitle, metaDescription) VALUES (?, ?, ?)');
-    const info = stmt.run(url, metaTitle, metaDescription);
-    if (info.changes > 0) {
-        // Если запись была вставлена, возвращаем её ID
-        return info.lastInsertRowid;
-    } else {
-        // Если запись уже существовала, получаем её ID
-        return dbInstance.prepare('SELECT id FROM pages WHERE url = ?').get(url).id;
+    const stmt = siteDbInstance.prepare('INSERT OR IGNORE INTO pages (url, metaTitle, metaDescription, contentType, responseStatus, responseTime) VALUES (?, ?, ?, ?, ?, ?)');
+    const info = stmt.run(url, metaTitle, metaDescription, contentType, responseStatus, responseTime);
+    if (info.changes === 0) {
+        const existingPage = siteDbInstance.prepare('SELECT id FROM pages WHERE url = ?').get(url);
+        return existingPage ? existingPage.id : null;
     }
+    return info.lastInsertRowid;
 }
 
-/**
- * Сохраняет заголовок (H1-H6) для страницы.
- * @param {number} pageId - ID страницы, к которой относится заголовок.
- * @param {string} type - Тип заголовка (например, 'H1').
- * @param {string} value - Текстовое значение заголовка.
- */
 function saveHeader(pageId, type, value) {
-    if (!dbInstance) {
-        throw new Error("База данных не инициализирована. Вызовите initDb() сначала.");
-    }
-    const stmt = dbInstance.prepare('INSERT INTO headers (pageId, type, value) VALUES (?, ?, ?)');
+    if (!siteDbInstance) return;
+    const stmt = siteDbInstance.prepare('INSERT INTO headers (pageId, type, value) VALUES (?, ?, ?)');
     stmt.run(pageId, type, value);
 }
 
-/**
- * Сохраняет входящую ссылку на страницу.
- * @param {number} pageId - ID целевой страницы.
- * @param {string} sourceUrl - URL страницы-источника, откуда идет ссылка.
- */
 function saveIncomingLink(pageId, sourceUrl) {
-    if (!dbInstance) {
-        throw new Error("База данных не инициализирована. Вызовите initDb() сначала.");
-    }
-    const stmt = dbInstance.prepare('INSERT OR IGNORE INTO incoming_links (pageId, sourceUrl) VALUES (?, ?)');
+    if (!siteDbInstance) return;
+    const stmt = siteDbInstance.prepare('INSERT OR IGNORE INTO incoming_links (pageId, sourceUrl) VALUES (?, ?)');
     stmt.run(pageId, sourceUrl);
 }
 
-/**
- * Получает все данные страниц для заданного сайта.
- * Открывает базу данных в режиме только для чтения, чтобы не мешать другим операциям.
- * @param {string} siteName - Имя сайта (домен).
- * @returns {Array<Object>} Массив объектов, представляющих страницы.
- */
-function getAllPages(siteName) {
-    const dbPath = getDbPath(siteName);
-    if (!fs.existsSync(dbPath)) {
-        console.warn(`[DB] База данных не найдена по пути: ${dbPath}`);
+function getAllScannedSites() {
+    try {
+        const metadataDb = getMetadataDbConnection();
+        const stmt = metadataDb.prepare('SELECT * FROM sites_metadata ORDER BY scannedAt DESC');
+        return stmt.all();
+    } catch (error) {
+        console.error("[DB] Ошибка при получении всех просканированных сайтов из базы данных метаданных:", error);
         return [];
     }
-    let tempDb = null;
+}
+
+function updateScanStatus(dbName, status) {
     try {
-        tempDb = new Database(dbPath, { readonly: true });
-        // Объединяем данные страниц и заголовков
-        const pages = tempDb.prepare(`
-            SELECT
-                p.url,
-                p.metaTitle,
-                p.metaDescription,
-                p.scannedAt,
-                GROUP_CONCAT(h.type || ': ' || h.value) as headers
-            FROM pages p
-            LEFT JOIN headers h ON p.id = h.pageId
-            GROUP BY p.id, p.url, p.metaTitle, p.metaDescription, p.scannedAt
-            ORDER BY p.url
-        `).all();
-        console.log(`[DB] Загружено ${pages.length} страниц для ${siteName}.`);
-        return pages;
+        const metadataDb = getMetadataDbConnection();
+        const stmt = metadataDb.prepare(`
+            INSERT INTO sites_metadata (dbName, domain, status)
+            VALUES (?, ?, ?)
+            ON CONFLICT(dbName) DO UPDATE SET
+                status = EXCLUDED.status,
+                scannedAt = CURRENT_TIMESTAMP;
+        `);
+        stmt.run(dbName, dbName, status); // Предполагается, что dbName также является доменным именем
+        console.log(`[DB] Обновлен статус для ${dbName} на: ${status} в ${METADATA_DB_FILE_NAME}`);
     } catch (error) {
-        console.error(`[DB] Ошибка при получении данных для ${siteName}: ${error.message}`);
+        console.error(`[DB_UPDATE_STATUS] Ошибка при обновлении статуса для ${dbName} в базе данных метаданных:`, error);
+    }
+}
+
+/**
+ * Получает все данные страницы (включая заголовки и входящие ссылки) для указанной базы данных сайта.
+ * Открывает временное соединение для чтения.
+ * @param {string} dbName - Имя базы данных сайта (обычно домен).
+ * @returns {Array<Object>} Массив объектов страниц с их деталями.
+ */
+function getAllPagesData(dbName) { // Переименована из getPageData для ясности
+    const dbPath = getSiteDbPath(dbName);
+    if (!fs.existsSync(dbPath)) {
+        console.warn(`[DB] База данных сайта не найдена для: ${dbName} по пути ${dbPath}`);
+        return [];
+    }
+
+    // Открываем новое соединение только для чтения
+    let localSiteDb;
+    try {
+        localSiteDb = new Database(dbPath, { readonly: true, verbose: console.log });
+        const pagesStmt = localSiteDb.prepare('SELECT id, url, metaTitle, metaDescription, scannedAt, contentType, responseStatus, responseTime FROM pages ORDER BY url');
+        const pages = pagesStmt.all();
+
+        // Получаем заголовки и входящие ссылки для каждой страницы
+        const headersStmt = localSiteDb.prepare('SELECT type, value FROM headers WHERE pageId = ?');
+        const incomingLinksStmt = localSiteDb.prepare('SELECT sourceUrl FROM incoming_links WHERE pageId = ?');
+
+        const pagesWithDetails = pages.map(page => {
+            const headers = headersStmt.all(page.id);
+            const incomingLinks = incomingLinksStmt.all(page.id).map(link => link.sourceUrl); // Извлекаем только URL
+
+            return {
+                ...page,
+                headers,
+                incomingLinks,
+            };
+        });
+        console.log(`[DB] Получено ${pagesWithDetails.length} страниц из ${dbName}.db`);
+        return pagesWithDetails;
+
+    } catch (error) {
+        console.error(`[DB] Ошибка при получении данных страницы из ${dbName}.db:`, error);
         return [];
     } finally {
-        if (tempDb) {
-            tempDb.close(); // Всегда закрываем соединение после использования
+        if (localSiteDb) {
+            localSiteDb.close(); // Закрываем соединение только для чтения
         }
     }
 }
 
+
+// Экспортируем функции с понятными именами
 module.exports = {
-    initDb,
+    getDbPath: getSiteDbPath, // Экспортируем getSiteDbPath как getDbPath для совместимости
+    initDb: initSiteDb,       // Экспортируем initSiteDb как initDb для совместимости
     savePageData,
     saveHeader,
     saveIncomingLink,
-    getAllPages,
-    // getDbPath // Не экспортируем, так как используется внутри
+    getAllScannedSites,
+    updateScanStatus,
+    getAllPages: getAllPagesData, // Экспортируем getAllPagesData как getAllPages
 };
