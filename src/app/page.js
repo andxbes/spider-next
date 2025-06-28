@@ -285,53 +285,56 @@ export default function HomePage() {
           <ul className="space-y-4">
             {scannedSites
               .sort((a, b) => new Date(b.scannedAt) - new Date(a.scannedAt)) // Сортировка по дате сканирования (от новых к старым)
-              .map((site) => (
-                <li
-                  key={site.id}
-                  className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-gray-50 p-4 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors duration-150"
-                >
-                  <div className="mb-2 sm:mb-0">
-                    <span className="font-medium text-lg text-gray-800">
-                      {site.domain}
-                    </span>
-                    <span className="text-sm text-gray-500 ml-0 sm:ml-2 block sm:inline">
-                      ({new Date(site.scannedAt).toLocaleString()})
-                    </span>
-                    {site.status === "pending" && (
-                      <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-blue-700 bg-blue-100 rounded-full">
-                        Сканирование...
-                      </span>
-                    )}
-                    {site.status === "scanning" && ( // Добавляем статус "scanning"
-                      <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-blue-700 bg-blue-100 rounded-full">
-                        Сканирование...
-                      </span>
-                    )}
-                    {site.status === "error" && (
-                      <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-red-700 bg-red-100 rounded-full">
-                        Ошибка!
-                      </span>
-                    )}
-                    {site.status === "completed" && (
-                      <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-green-700 bg-green-100 rounded-full">
-                        Завершено
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => handleViewResults(site.dbName)}
-                    className={`py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white transition duration-200 ease-in-out
-                                            ${scanInProgress ||
-                        site.status !== "completed"
-                        ? "bg-gray-400 cursor-not-allowed"
-                        : "bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-                      }`}
-                    disabled={scanInProgress || site.status !== "completed"} // Недоступно во время сканирования или если статус не 'completed'
+              .map((site) => {
+                // Сайт считается неактивным (и результаты можно смотреть), если он завершен или произошла ошибка.
+                // Кнопка блокируется только если сканирование в статусе 'pending' или 'scanning'.
+                const isSiteActive = site.status === "pending" || site.status === "scanning";
+                return (
+                  <li
+                    key={site.id}
+                    className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-gray-50 p-4 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors duration-150"
                   >
-                    Посмотреть Результаты
-                  </button>
-                </li>
-              ))}
+                    <div className="mb-2 sm:mb-0">
+                      <span className="font-medium text-lg text-gray-800">
+                        {site.domain}
+                      </span>
+                      <span className="text-sm text-gray-500 ml-0 sm:ml-2 block sm:inline">
+                        ({new Date(site.scannedAt).toLocaleString()})
+                      </span>
+                      {site.status === "pending" && (
+                        <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-blue-700 bg-blue-100 rounded-full">
+                          В очереди
+                        </span>
+                      )}
+                      {site.status === "scanning" && ( // Добавляем статус "scanning"
+                        <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-blue-700 bg-blue-100 rounded-full">
+                          Сканирование...
+                        </span>
+                      )}
+                      {site.status === "error" && (
+                        <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-red-700 bg-red-100 rounded-full">
+                          Ошибка
+                        </span>
+                      )}
+                      {site.status === "completed" && (
+                        <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-green-700 bg-green-100 rounded-full">
+                          Завершено
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleViewResults(site.dbName)}
+                      className={`py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white transition duration-200 ease-in-out ${isSiteActive
+                          ? "bg-gray-400 cursor-not-allowed"
+                          : "bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                        }`}
+                      disabled={isSiteActive} // Кнопка доступна, если статус 'completed' или 'error'
+                    >
+                      Посмотреть Результаты
+                    </button>
+                  </li>
+                );
+              })}
           </ul>
         )}
       </div>

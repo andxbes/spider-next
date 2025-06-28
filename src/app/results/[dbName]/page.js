@@ -166,7 +166,7 @@ export default function ResultsPage() {
                                 H1-H6
                             </th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Входящие ссылки
+                                Исходящие ссылки
                             </th>
                         </tr>
                     </thead>
@@ -203,12 +203,12 @@ export default function ResultsPage() {
                                 </td>
                                 {/* Кнопка для Входящих ссылок */}
                                 <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
-                                    {page.incomingLinks && page.incomingLinks.length > 0 ? (
+                                    {page.outgoingLinks && page.outgoingLinks.length > 0 ? (
                                         <button
-                                            onClick={() => openModal('Входящие ссылки', page.incomingLinks)}
+                                            onClick={() => openModal('Исходящие ссылки', page.outgoingLinks)}
                                             className="text-blue-600 hover:underline text-sm"
                                         >
-                                            Посмотреть ({page.incomingLinks.length})
+                                            Посмотреть ({page.outgoingLinks.length})
                                         </button>
                                     ) : 'Нет'}
                                 </td>
