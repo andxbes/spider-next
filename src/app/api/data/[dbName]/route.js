@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { getAllPages } from '@/spider/db';
 
 export async function GET(req, { params }) {
-    const { dbName } = params;
+    const { dbName } = await params;
     const { searchParams } = new URL(req.url);
 
     if (!dbName) {
