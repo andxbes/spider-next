@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"command": "bash -c 'source ~/.nvm/nvm.sh  && nvm use v22 && node -v && npm run dev'",
+			"problemMatcher": [],
+			"label": "npm: dev",
+			"detail": "Использует nvm для выбора Node.js v22, затем запускает dev-скрипт."
+		}
+	]
+}

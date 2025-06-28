@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation"; // Для App Router useRouter из
 export default function HomePage() {
   const [url, setUrl] = useState("");
   const [overwrite, setOverwrite] = useState(false);
+  const [concurrency, setConcurrency] = useState(5);
   const [scanInProgress, setScanInProgress] = useState(false);
   // scanStatus теперь будет объектом, содержащим status, progress (который может быть null), и другие метаданды
   const [scanStatus, setScanStatus] = useState(null);
@@ -110,7 +111,7 @@ export default function HomePage() {
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, overwrite }),
+        body: JSON.stringify({ url, overwrite, concurrency }),
       });
 
       if (res.status === 202) {
@@ -178,6 +179,25 @@ export default function HomePage() {
               placeholder="https://ваш-сайт.com"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
+              required
+              disabled={scanInProgress}
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="concurrency"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Количество потоков (1-100)
+            </label>
+            <input
+              type="number"
+              id="concurrency"
+              className="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 text-gray-700 focus:ring-blue-500 focus:border-blue-500 text-base transition duration-150 ease-in-out"
+              value={concurrency}
+              onChange={(e) => setConcurrency(parseInt(e.target.value, 10) || 1)}
+              min="1"
+              max="100"
               required
               disabled={scanInProgress}
             />

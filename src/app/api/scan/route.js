@@ -14,7 +14,7 @@ import { getDbPath, updateScanStatus, getAllScannedSites } from '@/spider/db';
 const scanProcesses = new Map();
 
 export async function POST(req) {
-    const { url, overwrite } = await req.json();
+    const { url, overwrite, concurrency } = await req.json();
 
     if (!url) {
         return NextResponse.json({ message: 'URL is required' }, { status: 400 });
@@ -114,7 +114,8 @@ export async function POST(req) {
         });
 
         // Send the initial 'start' message to the worker after setting up listeners
-        worker.postMessage({ type: 'start', url: url, overwrite: overwrite });
+        const numConcurrency = concurrency > 0 ? concurrency : 5; // По умолчанию 5, если не указано или неверно
+        worker.postMessage({ type: 'start', url: url, overwrite: overwrite, concurrency: numConcurrency });
         updateScanStatus(dbName, 'pending'); // Set initial status in metadata DB
 
         return NextResponse.json({ message: 'Scan initiated', dbName: dbName, status: 'pending' }, { status: 202 });

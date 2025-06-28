@@ -216,8 +216,14 @@ if (parentPort) {
     parentPort.on('message', async (message) => {
         console.log(`[SPIDER_WORKER] Получено сообщение типа: ${message.type}`);
         if (message.type === 'start') {
-            const { url, overwrite } = message;
+            const { url, overwrite, concurrency } = message;
             baseUrl = url;
+
+            if (concurrency && concurrency > 0) {
+                maxConcurrency = concurrency;
+                console.log(`[SPIDER_WORKER] Установлено количество потоков: ${maxConcurrency}`);
+            }
+
             try {
                 dbName = new URL(baseUrl).hostname;
             } catch (e) {
