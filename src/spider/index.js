@@ -2,7 +2,7 @@
 const cheerio = require('cheerio');
 const robots = require('robots-parser');
 const { URL } = require('url');
-const { initDb, savePageData, saveHeader, saveIncomingLink, getScannedUrls, getHtmlPagesForRescan } = require('./db');
+const { initDb, savePageData, saveHeader, saveIncomingLink, getScannedUrls, getDiscoveredUrls } = require('./db');
 const { parentPort } = require('worker_threads');
 
 // НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ для отправки логов в родительский процесс
@@ -268,21 +268,29 @@ if (parentPort) {
             initDb(dbName, overwrite);
             logToParent('info', `[SPIDER_WORKER] Сканирование начато для: ${baseUrl}, База данных: ${dbName}`);
 
-            // --- ЛОГИКА ВОЗОБНОВЛЕНИЯ СКАНИРОВАНИЯ ---
+            // --- НОВАЯ ЛОГИКА ВОЗОБНОВЛЕНИЯ СКАНИРОВАНИЯ ---
             if (!overwrite) {
                 logToParent('info', `[SPIDER_RESUME] Режим возобновления. Загрузка состояния из БД ${dbName}.db`);
+
+                // 1. Загружаем все УЖЕ ОБРАБОТАННЫЕ URL
                 const previouslyScanned = getScannedUrls(dbName);
                 previouslyScanned.forEach(url => crawledUrls.add(url));
+                logToParent('info', `[SPIDER_RESUME] Загружено ${crawledUrls.size} ранее обработанных URL.`);
 
-                const pagesToRescan = getHtmlPagesForRescan(dbName);
-                pagesToRescan.forEach(url => {
+                // 2. Находим все ОБНАРУЖЕННЫЕ URL (на которые есть ссылки)
+                const discoveredUrls = getDiscoveredUrls(dbName);
+                logToParent('info', `[SPIDER_RESUME] Найдено ${discoveredUrls.length} уникальных ссылок в базе.`);
+
+                // 3. Добавляем в очередь только те, которые еще не были обработаны
+                discoveredUrls.forEach(url => {
                     if (!urlsToCrawl.includes(url)) {
                         urlsToCrawl.push(url);
                     }
                 });
 
-                totalUrlsFound = crawledUrls.size;
-                logToParent('info', `[SPIDER_RESUME] Загружено ${crawledUrls.size} ранее обработанных URL. Поставлено в очередь ${urlsToCrawl.length} страниц для повторного сканирования.`);
+                totalUrlsFound = crawledUrls.size + urlsToCrawl.length;
+                processedUrlsCount = crawledUrls.size; // Уже обработанные страницы
+                logToParent('info', `[SPIDER_RESUME] Поставлено в очередь ${urlsToCrawl.length} новых страниц для сканирования.`);
             }
 
             // Получаем и парсим robots.txt

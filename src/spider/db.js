@@ -106,7 +106,7 @@ function initSiteDb(siteName, overwrite = false) { // Переименовано
         CREATE TABLE IF NOT EXISTS incoming_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pageId INTEGER,
-            sourceUrl TEXT NOT NULL,
+            sourceUrl TEXT NOT NULL, -- Примечание: это URL, НА который ведет ссылка (цель)
             FOREIGN KEY (pageId) REFERENCES pages(id) ON DELETE CASCADE
         );
     `);
@@ -193,16 +193,16 @@ function getAllPagesData(dbName) { // Переименована из getPageDat
 
         // Получаем заголовки и входящие ссылки для каждой страницы
         const headersStmt = localSiteDb.prepare('SELECT type, value FROM headers WHERE pageId = ?');
-        const incomingLinksStmt = localSiteDb.prepare('SELECT sourceUrl FROM incoming_links WHERE pageId = ?');
+        const outgoingLinksStmt = localSiteDb.prepare('SELECT sourceUrl FROM incoming_links WHERE pageId = ?');
 
         const pagesWithDetails = pages.map(page => {
             const headers = headersStmt.all(page.id);
-            const incomingLinks = incomingLinksStmt.all(page.id).map(link => link.sourceUrl); // Извлекаем только URL
+            const outgoingLinks = outgoingLinksStmt.all(page.id).map(link => link.sourceUrl); // Извлекаем только URL
 
             return {
                 ...page,
                 headers,
-                incomingLinks,
+                outgoingLinks, // Технически, это исходящие ссылки
             };
         });
         // console.log(`[DB] Получено ${pagesWithDetails.length} страниц из ${dbName}.db`);
@@ -245,11 +245,12 @@ function getScannedUrls(dbName) {
 }
 
 /**
- * Получает все URL-адреса HTML-страниц для возобновления сканирования.
+ * Получает все уникальные URL-адреса, на которые есть ссылки (обнаруженные URL).
+ * Используется для возобновления сканирования, чтобы найти еще не обработанные страницы.
  * @param {string} dbName - Имя базы данных сайта.
- * @returns {string[]} Массив URL-адресов.
+ * @returns {string[]} Массив уникальных URL-адресов.
  */
-function getHtmlPagesForRescan(dbName) {
+function getDiscoveredUrls(dbName) {
     const dbPath = getSiteDbPath(dbName);
     if (!fs.existsSync(dbPath)) {
         return [];
@@ -257,61 +258,11 @@ function getHtmlPagesForRescan(dbName) {
     let localSiteDb;
     try {
         localSiteDb = new Database(dbPath, { readonly: true });
-        const stmt = localSiteDb.prepare("SELECT url FROM pages WHERE contentType = 'HTML_PAGE'");
-        return stmt.all().map(row => row.url);
+        // DISTINCT гарантирует, что мы получим только уникальные URL
+        const stmt = localSiteDb.prepare('SELECT DISTINCT sourceUrl FROM incoming_links');
+        return stmt.all().map(row => row.sourceUrl);
     } catch (error) {
-        console.error(`[DB] Ошибка при получении HTML-страниц для повторного сканирования из ${dbName}.db:`, error);
-        return [];
-    } finally {
-        if (localSiteDb) {
-            localSiteDb.close();
-        }
-    }
-}
-
-/**
- * Получает все URL-адреса из таблицы pages для указанной базы данных сайта.
- * Используется для возобновления сканирования, чтобы не обрабатывать уже известные URL.
- * @param {string} dbName - Имя базы данных сайта.
- * @returns {string[]} Массив URL-адресов.
- */
-function getScannedUrls(dbName) {
-    const dbPath = getSiteDbPath(dbName);
-    if (!fs.existsSync(dbPath)) {
-        return [];
-    }
-    let localSiteDb;
-    try {
-        localSiteDb = new Database(dbPath, { readonly: true });
-        const stmt = localSiteDb.prepare('SELECT url FROM pages');
-        return stmt.all().map(row => row.url);
-    } catch (error) {
-        console.error(`[DB] Ошибка при получении отсканированных URL-адресов из ${dbName}.db:`, error);
-        return [];
-    } finally {
-        if (localSiteDb) {
-            localSiteDb.close();
-        }
-    }
-}
-
-/**
- * Получает все URL-адреса HTML-страниц для возобновления сканирования.
- * @param {string} dbName - Имя базы данных сайта.
- * @returns {string[]} Массив URL-адресов.
- */
-function getHtmlPagesForRescan(dbName) {
-    const dbPath = getSiteDbPath(dbName);
-    if (!fs.existsSync(dbPath)) {
-        return [];
-    }
-    let localSiteDb;
-    try {
-        localSiteDb = new Database(dbPath, { readonly: true });
-        const stmt = localSiteDb.prepare("SELECT url FROM pages WHERE contentType = 'HTML_PAGE'");
-        return stmt.all().map(row => row.url);
-    } catch (error) {
-        console.error(`[DB] Ошибка при получении HTML-страниц для повторного сканирования из ${dbName}.db:`, error);
+        console.error(`[DB] Ошибка при получении обнаруженных URL-адресов из ${dbName}.db:`, error);
         return [];
     } finally {
         if (localSiteDb) {
@@ -331,5 +282,5 @@ module.exports = {
     updateScanStatus,
     getAllPages: getAllPagesData, // Экспортируем getAllPagesData как getAllPages
     getScannedUrls,
-    getHtmlPagesForRescan,
+    getDiscoveredUrls,
 };
