@@ -1,79 +1,77 @@
 // src/app/results/[dbName]/page.js
 "use client"; // Это Client Component
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Modal from '@/components/Modal'; // Импортируем компонент модального окна
+
+const PAGE_SIZE = 100;
 
 export default function ResultsPage() {
     const params = useParams();
     const dbName = params.dbName;
 
     const [pages, setPages] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(true); // Для начальной загрузки
+    const [isFetchingMore, setIsFetchingMore] = useState(false); // Для подгрузки
     const [error, setError] = useState(null);
-    const [sortConfig, setSortConfig] = useState({ key: null, direction: 'ascending' });
+    const [sortConfig, setSortConfig] = useState({ key: 'url', direction: 'ascending' });
+    const [currentPage, setCurrentPage] = useState(1);
+    const [hasMore, setHasMore] = useState(true);
 
     // Состояние для модального окна
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [modalContent, setModalContent] = useState({ title: '', data: [] });
 
-    useEffect(() => {
+    const fetchPages = useCallback(async (pageToFetch, shouldReset = false) => {
         if (!dbName) return;
 
-        const fetchData = async () => {
-            setLoading(true);
-            setError(null);
-            try {
-                const res = await fetch(`/api/data/${dbName}`);
-                if (!res.ok) {
-                    throw new Error(`HTTP ошибка! Статус: ${res.status}`);
-                }
-                const data = await res.json();
-                setPages(data);
-            } catch (err) {
-                console.error("Не удалось загрузить данные страниц:", err);
-                setError("Не удалось загрузить данные страниц: " + err.message);
-            } finally {
-                setLoading(false);
+        const stateSetter = shouldReset ? setLoading : setIsFetchingMore;
+        stateSetter(true);
+        setError(null);
+
+        try {
+            const res = await fetch(`/api/data/${dbName}?page=${pageToFetch}&limit=${PAGE_SIZE}&sortKey=${sortConfig.key}&sortDirection=${sortConfig.direction}`);
+            if (!res.ok) {
+                throw new Error(`HTTP ошибка! Статус: ${res.status}`);
             }
-        };
+            const { pages: newPages, total } = await res.json();
 
-        fetchData();
-    }, [dbName]);
+            setPages(prevPages => (shouldReset ? newPages : [...prevPages, ...newPages]));
+            setCurrentPage(pageToFetch);
+            setHasMore((pageToFetch * PAGE_SIZE) < total);
 
-    const sortedPages = useMemo(() => {
-        let sortableItems = [...pages];
-        if (sortConfig.key !== null) {
-            sortableItems.sort((a, b) => {
-                let aValue = a[sortConfig.key];
-                let bValue = b[sortConfig.key];
-
-                if (aValue === null || aValue === undefined) aValue = '';
-                if (bValue === null || bValue === undefined) bValue = '';
-
-                if (typeof aValue === 'string' && typeof bValue === 'string') {
-                    return sortConfig.direction === 'ascending'
-                        ? aValue.localeCompare(bValue)
-                        : bValue.localeCompare(aValue);
-                }
-                if (aValue < bValue) {
-                    return sortConfig.direction === 'ascending' ? -1 : 1;
-                }
-                if (aValue > bValue) {
-                    return sortConfig.direction === 'ascending' ? 1 : -1;
-                }
-                return 0;
-            });
+        } catch (err) {
+            console.error("Не удалось загрузить данные страниц:", err);
+            setError("Не удалось загрузить данные страниц: " + err.message);
+        } finally {
+            stateSetter(false);
         }
-        return sortableItems;
-    }, [pages, sortConfig]);
+    }, [dbName, sortConfig.key, sortConfig.direction]);
+
+    // Начальная загрузка и загрузка при изменении сортировки
+    useEffect(() => {
+        if (dbName) {
+            // Сбрасываем состояние перед загрузкой новых отсортированных данных
+            setPages([]);
+            setCurrentPage(1);
+            setHasMore(true);
+            fetchPages(1, true);
+        }
+    }, [dbName, sortConfig, fetchPages]);
+
+    const loadMorePages = () => {
+        if (!isFetchingMore && hasMore) {
+            fetchPages(currentPage + 1, false);
+        }
+    };
 
     const handleSort = (key) => {
         let direction = 'ascending';
         if (sortConfig.key === key && sortConfig.direction === 'ascending') {
             direction = 'descending';
         }
+        // Это вызовет useEffect для перезагрузки данных
         setSortConfig({ key, direction });
     };
 
@@ -171,7 +169,7 @@ export default function ResultsPage() {
                         </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                        {sortedPages.map((page) => (
+                        {pages.map((page) => (
                             <tr key={page.id}>
                                 <td className="px-6 py-4 whitespace-normal text-sm font-medium text-blue-600 hover:underline break-words max-w-[300px]">
                                     <a href={page.url} target="_blank" rel="noopener noreferrer">
@@ -216,6 +214,21 @@ export default function ResultsPage() {
                         ))}
                     </tbody>
                 </table>
+                {isFetchingMore && (
+                    <div className="text-center p-4">
+                        <p className="text-gray-600">Загрузка...</p>
+                    </div>
+                )}
+                {hasMore && !loading && !isFetchingMore && (
+                    <div className="text-center p-4">
+                        <button
+                            onClick={loadMorePages}
+                            className="py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        >
+                            Загрузить еще
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Компонент модального окна */}

@@ -172,24 +172,46 @@ function updateScanStatus(dbName, status) {
  * Получает все данные страницы (включая заголовки и входящие ссылки) для указанной базы данных сайта.
  * Открывает временное соединение для чтения.
  * @param {string} dbName - Имя базы данных сайта (обычно домен).
- * @returns {Array<Object>} Массив объектов страниц с их деталями.
+ * @param {object} options - Опции для пагинации и сортировки.
+ * @param {number} options.limit - Количество записей на странице.
+ * @param {number} options.page - Номер страницы.
+ * @param {string} options.sortKey - Ключ для сортировки.
+ * @param {string} options.sortDirection - Направление сортировки ('ascending' или 'descending').
+ * @returns {{pages: Array<Object>, total: number}} Объект с массивом страниц и общим количеством.
  */
-function getAllPagesData(dbName) { // Переименована из getPageData для ясности
+function getAllPagesData(dbName, { limit = 100, page = 1, sortKey = 'url', sortDirection = 'ascending' } = {}) {
     const dbPath = getSiteDbPath(dbName);
     if (!fs.existsSync(dbPath)) {
         console.warn(`[DB] База данных сайта не найдена для: ${dbName} по пути ${dbPath}`);
-        return [];
+        return { pages: [], total: 0 };
     }
+
+    // Валидация параметров сортировки для предотвращения SQL-инъекций
+    const allowedSortKeys = ['url', 'metaTitle', 'metaDescription', 'responseStatus', 'responseTime'];
+    const safeSortKey = allowedSortKeys.includes(sortKey) ? sortKey : 'url';
+    const safeSortDirection = sortDirection === 'descending' ? 'DESC' : 'ASC';
+
+    const offset = (page - 1) * limit;
 
     // Открываем новое соединение только для чтения
     let localSiteDb;
     try {
-        localSiteDb = new Database(dbPath, {
-            readonly: true,
-            // verbose: console.log 
-        });
-        const pagesStmt = localSiteDb.prepare('SELECT id, url, metaTitle, metaDescription, scannedAt, contentType, responseStatus, responseTime FROM pages ORDER BY url');
-        const pages = pagesStmt.all();
+        localSiteDb = new Database(dbPath, { readonly: true });
+
+        // Сначала получаем общее количество страниц
+        const totalStmt = localSiteDb.prepare('SELECT COUNT(*) as count FROM pages');
+        const totalResult = totalStmt.get();
+        const total = totalResult.count;
+
+        // Затем получаем пагинированный и отсортированный список
+        const pagesQuery = `
+            SELECT id, url, metaTitle, metaDescription, scannedAt, contentType, responseStatus, responseTime 
+            FROM pages 
+            ORDER BY ${safeSortKey} ${safeSortDirection}
+            LIMIT ? OFFSET ?
+        `;
+        const pagesStmt = localSiteDb.prepare(pagesQuery);
+        const pages = pagesStmt.all(limit, offset);
 
         // Получаем заголовки и входящие ссылки для каждой страницы
         const headersStmt = localSiteDb.prepare('SELECT type, value FROM headers WHERE pageId = ?');
@@ -205,12 +227,11 @@ function getAllPagesData(dbName) { // Переименована из getPageDat
                 outgoingLinks, // Технически, это исходящие ссылки
             };
         });
-        // console.log(`[DB] Получено ${pagesWithDetails.length} страниц из ${dbName}.db`);
-        return pagesWithDetails;
+        return { pages: pagesWithDetails, total };
 
     } catch (error) {
         console.error(`[DB] Ошибка при получении данных страницы из ${dbName}.db:`, error);
-        return [];
+        return { pages: [], total: 0 };
     } finally {
         if (localSiteDb) {
             localSiteDb.close(); // Закрываем соединение только для чтения
