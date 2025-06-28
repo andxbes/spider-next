@@ -5,17 +5,35 @@ const { URL } = require('url');
 const { initDb, savePageData, saveHeader, saveIncomingLink } = require('./db');
 const { parentPort } = require('worker_threads');
 
+// НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ для отправки логов в родительский процесс
+function logToParent(level, ...args) {
+    if (parentPort) {
+        // Преобразуем все аргументы в строку для надежной передачи
+        const message = args.map(arg => {
+            if (arg instanceof Error) return arg.stack || arg.message;
+            if (typeof arg === 'object' && arg !== null) return JSON.stringify(arg, null, 2);
+            return String(arg);
+        }).join(' ');
+
+        parentPort.postMessage({
+            type: 'log',
+            level: level, // 'info', 'warn', 'error'
+            message: message
+        });
+    }
+}
+
 // Проверяем версию Node.js для определения, нужен ли node-fetch
 let fetch;
 if (parseFloat(process.versions.node) < 18) {
     // Для Node.js < 18 требуется явный импорт node-fetch
     // Убедитесь, что 'node-fetch' установлен: npm install node-fetch
     fetch = require('node-fetch');
-    console.log("[SPIDER_INIT] Using node-fetch for Node.js < 18.");
+    logToParent("info", "[SPIDER_INIT] Using node-fetch for Node.js < 18.");
 } else {
     // В Node.js 18+ fetch глобально доступен
     fetch = global.fetch;
-    console.log("[SPIDER_INIT] Using built-in fetch for Node.js >= 18.");
+    logToParent("info", "[SPIDER_INIT] Using built-in fetch for Node.js >= 18.");
 }
 
 
@@ -60,13 +78,13 @@ async function fetchPage(url) {
 
         if (response.ok && response.headers.get('content-type')?.includes('text/html')) {
             html = await response.text();
-            console.log(`[SPIDER_FETCH] Успешно загружен HTML для ${url} (Статус: ${responseStatus}, Время: ${responseTime} мс)`);
+            logToParent('info', `[SPIDER_FETCH] Успешно загружен HTML для ${url} (Статус: ${responseStatus}, Время: ${responseTime} мс)`);
         } else {
-            console.warn(`[SPIDER_FETCH] Не HTML контент или ошибка для ${url}. Статус: ${responseStatus}, Content-Type: ${response.headers.get('content-type') || 'N/A'}`);
+            logToParent('warn', `[SPIDER_FETCH] Не HTML контент или ошибка для ${url}. Статус: ${responseStatus}, Content-Type: ${response.headers.get('content-type') || 'N/A'}`);
         }
     } catch (error) {
         responseTime = Date.now() - start; // Измеряем время даже при ошибке
-        console.error(`[SPIDER_FETCH] Ошибка при загрузке ${url}: ${error.message} (Время: ${responseTime} мс)`);
+        logToParent('error', `[SPIDER_FETCH] Ошибка при загрузке ${url}:`, error);
         // Устанавливаем статус для сетевых ошибок
         if (error.code === 'ENOTFOUND') {
             responseStatus = 0; // Ошибка DNS
@@ -88,7 +106,7 @@ async function fetchPage(url) {
  * Основная функция сканирования.
  */
 async function crawl() {
-    console.log("[SPIDER_CRAWL] Начинаем основной цикл сканирования...");
+    logToParent("info", "[SPIDER_CRAWL] Начинаем основной цикл сканирования...");
     // Цикл продолжается, пока есть URL-ы для обработки или активные краулеры
     while (urlsToCrawl.length > 0 || activeCrawlers > 0) {
         // Запускаем новые краулеры, если есть свободные слоты и URL-ы для обработки
@@ -111,7 +129,7 @@ async function crawl() {
                     scannedCount: processedUrlsCount,
                 });
             }
-            console.log(`[SPIDER_QUEUE] Обработка: ${currentUrl} (Осталось в очереди: ${urlsToCrawl.length}, Активных: ${activeCrawlers})`);
+            logToParent('info', `[SPIDER_QUEUE] Обработка: ${currentUrl} (Осталось в очереди: ${urlsToCrawl.length}, Активных: ${activeCrawlers})`);
 
             // Запускаем асинхронную функцию для обработки текущего URL
             (async () => {
@@ -121,7 +139,7 @@ async function crawl() {
 
                     // Проверяем robots.txt (если он загружен)
                     if (robotsParser && !robotsParser.isAllowed(currentUrl, userAgent)) {
-                        console.log(`[SPIDER_ROBOTS] ${currentUrl} запрещен robots.txt`);
+                        logToParent('warn', `[SPIDER_ROBOTS] ${currentUrl} запрещен robots.txt`);
                         // Сохраняем запись для запрещенного URL со статусом 0 и временем 0
                         savePageData(currentUrl, 'Disallowed by robots.txt', null, 'DISALLOWED', 0, 0);
                         return; // Пропускаем дальнейшую обработку
@@ -131,7 +149,7 @@ async function crawl() {
 
                     // Если был редирект, и конечный URL новый, добавляем его в очередь
                     if (finalUrl !== currentUrl && !crawledUrls.has(finalUrl)) {
-                        console.log(`[SPIDER_REDIRECT] ${currentUrl} редирект на ${finalUrl}`);
+                        logToParent('info', `[SPIDER_REDIRECT] ${currentUrl} редирект на ${finalUrl}`);
                         crawledUrls.add(finalUrl); // Добавляем конечный URL в обработанные
                         urlsToCrawl.push(finalUrl); // Добавляем в очередь для обработки
                         totalUrlsFound++; // Учитываем новый URL
@@ -187,12 +205,12 @@ async function crawl() {
 
                     } else {
                         // Если HTML не получен (например, ошибка загрузки, не HTML контент)
-                        console.log(`[SPIDER_PROCESS] Сохранение записи для ${currentUrl} без HTML.`);
+                        logToParent('info', `[SPIDER_PROCESS] Сохранение записи для ${currentUrl} без HTML.`);
                         // Сохраняем запись даже без HTML, чтобы иметь информацию о статусе и времени
                         savePageData(finalUrl, null, null, 'NON_HTML_OR_ERROR', responseStatus, responseTime);
                     }
                 } catch (error) {
-                    console.error(`[SPIDER_ERROR] Непредвиденная ошибка при обработке ${currentUrl}: ${error.message}`);
+                    logToParent('error', `[SPIDER_ERROR] Непредвиденная ошибка при обработке ${currentUrl}:`, error);
                     // В случае внутренней ошибки, также сохраняем запись
                     savePageData(currentUrl, null, null, 'INTERNAL_ERROR', -1, -1); // Статус -1 для внутренних ошибок
                 } finally {
@@ -208,26 +226,29 @@ async function crawl() {
             await new Promise(resolve => setTimeout(resolve, 100));
         }
     }
-    console.log("[SPIDER_CRAWL] Основной цикл сканирования завершен.");
+    logToParent("info", "[SPIDER_CRAWL] Основной цикл сканирования завершен.");
 }
 
 // Запуск спайдера через worker_threads
 if (parentPort) {
+    // Отправляем сообщение, что воркер жив, сразу после запуска
+    logToParent('info', '[SPIDER_WORKER] Worker thread has started.');
+
     parentPort.on('message', async (message) => {
-        console.log(`[SPIDER_WORKER] Получено сообщение типа: ${message.type}`);
+        logToParent('info', `[SPIDER_WORKER] Получено сообщение типа: ${message.type}`);
         if (message.type === 'start') {
             const { url, overwrite, concurrency } = message;
             baseUrl = url;
 
             if (concurrency && concurrency > 0) {
                 maxConcurrency = concurrency;
-                console.log(`[SPIDER_WORKER] Установлено количество потоков: ${maxConcurrency}`);
+                logToParent('info', `[SPIDER_WORKER] Установлено количество потоков: ${maxConcurrency}`);
             }
 
             try {
                 dbName = new URL(baseUrl).hostname;
-            } catch (e) {
-                console.error(`[SPIDER_WORKER] Некорректный базовый URL: ${baseUrl}`, e);
+            } catch (error) {
+                logToParent('error', `[SPIDER_WORKER] Некорректный базовый URL: ${baseUrl}`, error);
                 if (parentPort) {
                     parentPort.postMessage({ type: 'error', message: `Некорректный базовый URL: ${baseUrl}` });
                 }
@@ -235,7 +256,7 @@ if (parentPort) {
             }
 
             initDb(dbName, overwrite);
-            console.log(`[SPIDER_WORKER] Сканирование начато для: ${baseUrl}, База данных: ${dbName}`);
+            logToParent('info', `[SPIDER_WORKER] Сканирование начато для: ${baseUrl}, База данных: ${dbName}`);
 
             // Получаем и парсим robots.txt
             try {
@@ -246,13 +267,13 @@ if (parentPort) {
                 if (robotsTxtRes.ok) {
                     const robotsTxtContent = await robotsTxtRes.text();
                     robotsParser = robots(robotsTxtUrl, robotsTxtContent);
-                    console.log(`[SPIDER_ROBOTS] robots.txt загружен для ${baseUrl}`);
+                    logToParent('info', `[SPIDER_ROBOTS] robots.txt загружен для ${baseUrl}`);
                 } else {
-                    console.warn(`[SPIDER_ROBOTS] robots.txt не найден или ошибка для ${baseUrl}. Статус: ${robotsTxtRes.status}`);
+                    logToParent('warn', `[SPIDER_ROBOTS] robots.txt не найден или ошибка для ${baseUrl}. Статус: ${robotsTxtRes.status}`);
                     robotsParser = robots(robotsTxtUrl, ''); // Создаем пустой парсер, если robots.txt не найден
                 }
             } catch (error) {
-                console.error(`[SPIDER_ROBOTS] Ошибка при загрузке robots.txt для ${baseUrl}: ${error.message}`);
+                logToParent('error', `[SPIDER_ROBOTS] Ошибка при загрузке robots.txt для ${baseUrl}:`, error);
                 robotsParser = robots(new URL('/robots.txt', baseUrl).href, ''); // Продолжаем без robots.txt
             }
 
@@ -262,7 +283,7 @@ if (parentPort) {
                 urlsToCrawl.push(baseUrl);
                 totalUrlsFound = 1;
             } else {
-                console.log(`[SPIDER_INIT] Базовый URL ${baseUrl} уже в списке обработанных.`);
+                logToParent('info', `[SPIDER_INIT] Базовый URL ${baseUrl} уже в списке обработанных.`);
                 totalUrlsFound = crawledUrls.size; // Если уже есть, инициализируем по размеру Set
             }
 
@@ -271,7 +292,7 @@ if (parentPort) {
             // Отправляем сообщение о завершении сканирования
             if (parentPort) {
                 parentPort.postMessage({ type: 'completed', dbName: dbName });
-                console.log(`[SPIDER_WORKER] Сканирование для ${dbName} завершено.`);
+                logToParent('info', `[SPIDER_WORKER] Сканирование для ${dbName} завершено.`);
             }
         }
     });

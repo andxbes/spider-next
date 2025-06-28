@@ -62,7 +62,13 @@ export async function POST(req) {
 
         // Handle messages from the worker
         worker.on('message', (msg) => {
-            if (msg.type === 'progress') {
+            if (msg.type === 'log') {
+                // Выводим лог в консоль основного процесса с соответствующим уровнем
+                // Уровни 'info', 'warn', 'error' соответствуют методам console
+                const logFunction = console[msg.level] || console.log;
+                logFunction(`[WORKER] ${msg.message}`);
+
+            } else if (msg.type === 'progress') {
                 currentScanningProcess.status = 'scanning';
                 currentScanningProcess.progress = {
                     message: msg.message,
