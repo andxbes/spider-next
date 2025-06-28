@@ -156,7 +156,7 @@ export default function HomePage() {
   return (
     <div className="container mx-auto p-4 max-w-4xl font-sans">
       <h1 className="text-4xl font-extrabold mb-8 text-center text-gray-100">
-        Интерфейс Веб-Спайдера
+        Web Spider
       </h1>
 
       {/* Форма для нового сканирования */}
@@ -325,8 +325,8 @@ export default function HomePage() {
                     <button
                       onClick={() => handleViewResults(site.dbName)}
                       className={`py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white transition duration-200 ease-in-out ${isSiteActive
-                          ? "bg-gray-400 cursor-not-allowed"
-                          : "bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                        ? "bg-gray-400 cursor-not-allowed"
+                        : "bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
                         }`}
                       disabled={isSiteActive} // Кнопка доступна, если статус 'completed' или 'error'
                     >
