@@ -2,7 +2,7 @@
 const cheerio = require('cheerio');
 const robots = require('robots-parser');
 const { URL } = require('url');
-const { initDb, savePageData, saveHeader, saveIncomingLink } = require('./db');
+const { initDb, savePageData, saveHeader, saveIncomingLink, getScannedUrls, getHtmlPagesForRescan } = require('./db');
 const { parentPort } = require('worker_threads');
 
 // НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ для отправки логов в родительский процесс
@@ -237,6 +237,16 @@ if (parentPort) {
     parentPort.on('message', async (message) => {
         logToParent('info', `[SPIDER_WORKER] Получено сообщение типа: ${message.type}`);
         if (message.type === 'start') {
+            // Сбрасываем состояние воркера перед каждым новым сканированием
+            crawledUrls.clear();
+            urlsToCrawl.length = 0;
+            activeCrawlers = 0;
+            totalUrlsFound = 0;
+            processedUrlsCount = 0;
+            robotsParser = undefined;
+            dbName = '';
+            baseUrl = '';
+
             const { url, overwrite, concurrency } = message;
             baseUrl = url;
 
@@ -258,6 +268,23 @@ if (parentPort) {
             initDb(dbName, overwrite);
             logToParent('info', `[SPIDER_WORKER] Сканирование начато для: ${baseUrl}, База данных: ${dbName}`);
 
+            // --- ЛОГИКА ВОЗОБНОВЛЕНИЯ СКАНИРОВАНИЯ ---
+            if (!overwrite) {
+                logToParent('info', `[SPIDER_RESUME] Режим возобновления. Загрузка состояния из БД ${dbName}.db`);
+                const previouslyScanned = getScannedUrls(dbName);
+                previouslyScanned.forEach(url => crawledUrls.add(url));
+
+                const pagesToRescan = getHtmlPagesForRescan(dbName);
+                pagesToRescan.forEach(url => {
+                    if (!urlsToCrawl.includes(url)) {
+                        urlsToCrawl.push(url);
+                    }
+                });
+
+                totalUrlsFound = crawledUrls.size;
+                logToParent('info', `[SPIDER_RESUME] Загружено ${crawledUrls.size} ранее обработанных URL. Поставлено в очередь ${urlsToCrawl.length} страниц для повторного сканирования.`);
+            }
+
             // Получаем и парсим robots.txt
             try {
                 const robotsTxtUrl = new URL('/robots.txt', baseUrl).href;
@@ -277,14 +304,16 @@ if (parentPort) {
                 robotsParser = robots(new URL('/robots.txt', baseUrl).href, ''); // Продолжаем без robots.txt
             }
 
-            // Инициализация очереди
-            if (!crawledUrls.has(baseUrl)) { // Убедимся, что базовый URL не добавлен дважды
-                crawledUrls.add(baseUrl);
-                urlsToCrawl.push(baseUrl);
-                totalUrlsFound = 1;
+            // Инициализация очереди, если она пуста после попытки возобновления
+            if (urlsToCrawl.length === 0) {
+                logToParent('info', `[SPIDER_INIT] Очередь пуста, начинаем с базового URL: ${baseUrl}`);
+                if (!crawledUrls.has(baseUrl)) {
+                    crawledUrls.add(baseUrl);
+                    urlsToCrawl.push(baseUrl);
+                    totalUrlsFound = crawledUrls.size;
+                }
             } else {
-                logToParent('info', `[SPIDER_INIT] Базовый URL ${baseUrl} уже в списке обработанных.`);
-                totalUrlsFound = crawledUrls.size; // Если уже есть, инициализируем по размеру Set
+                logToParent('info', `[SPIDER_INIT] Начинаем с ${urlsToCrawl.length} URL в очереди из предыдущей сессии.`);
             }
 
             await crawl(); // Запускаем основной цикл сканирования

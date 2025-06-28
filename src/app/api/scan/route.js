@@ -4,16 +4,12 @@ import { Worker } from 'worker_threads';
 import path from 'path';
 import fs from 'fs';
 
-// Импорт getDbPath теперь использует алиас @/
-import { getDbPath, updateScanStatus, getAllScannedSites } from '@/spider/db';
-
-
-// Global map to keep track of active scanning processes.
-// In a production environment, for persistent state across serverless function invocations,
-// you would typically use a database (e.g., Redis) instead of in-memory storage.
-const scanProcesses = new Map();
+// Импортируем функции для работы с БД и общее состояние
+import { updateScanStatus, getAllScannedSites } from '@/spider/db';
+import { scanProcesses, runStaleScansCleanup } from './state';
 
 export async function POST(req) {
+    runStaleScansCleanup(); // Запускаем очистку при каждом запросе
     const { url, overwrite, concurrency } = await req.json();
 
     if (!url) {
@@ -133,6 +129,7 @@ export async function POST(req) {
 }
 
 export async function GET(req) {
+    runStaleScansCleanup(); // Запускаем очистку и здесь
     const url = new URL(req.url);
     const dbName = url.searchParams.get('dbName');
 
