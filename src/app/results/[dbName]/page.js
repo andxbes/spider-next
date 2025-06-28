@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Modal from '@/components/Modal'; // Импортируем компонент модального окна
+import Link from 'next/link';
 
 const PAGE_SIZE = 100;
 
@@ -132,10 +133,14 @@ export default function ResultsPage() {
 
     return (
         <div className="container mx-auto p-4 max-w-full font-sans">
-            <h1 className="text-4xl font-extrabold mb-8 text-center text-gray-100">
-                Результаты сканирования для &quot;{dbName}&quot;
-            </h1>
-
+            <div className='flex justify-between items-center mb-8 '>
+                <Link className='flex items-center' href={'/'}>
+                    &#9668; Back
+                </Link>
+                <h1 className="text-4xl font-extrabold text-center text-gray-100">
+                    Результаты сканирования для &quot;{dbName}&quot;
+                </h1>
+            </div>
             <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100 overflow-x-auto">
                 <table className="min-w-max divide-y divide-gray-200">
                     <thead className="bg-gray-50">
