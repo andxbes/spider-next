@@ -1,7 +1,7 @@
 // src/app/results/[dbName]/page.js
 "use client"; // Это Client Component
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Modal from '@/components/Modal'; // Импортируем компонент модального окна
 
@@ -19,9 +19,8 @@ export default function ResultsPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
 
-    // Состояние для модального окна
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [modalContent, setModalContent] = useState({ title: '', data: [] });
+    // Ref для IntersectionObserver
+    const observer = useRef();
 
     const fetchPages = useCallback(async (pageToFetch, shouldReset = false) => {
         if (!dbName) return;
@@ -49,6 +48,24 @@ export default function ResultsPage() {
         }
     }, [dbName, sortConfig.key, sortConfig.direction]);
 
+    const lastPageElementRef = useCallback(node => {
+        if (isFetchingMore) return; // Не пересоздаем наблюдатель во время загрузки
+        if (observer.current) observer.current.disconnect(); // Отключаем старый
+        observer.current = new IntersectionObserver(entries => {
+            // Если элемент виден и есть еще страницы для загрузки
+            if (entries[0].isIntersecting && hasMore) {
+                fetchPages(currentPage + 1, false);
+            }
+        });
+        if (node) observer.current.observe(node); // Начинаем наблюдение за новым элементом
+    }, [isFetchingMore, hasMore, currentPage, fetchPages]);
+
+    // Состояние для модального окна
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [modalContent, setModalContent] = useState({ title: '', data: [] });
+
+
+
     // Начальная загрузка и загрузка при изменении сортировки
     useEffect(() => {
         if (dbName) {
@@ -59,12 +76,6 @@ export default function ResultsPage() {
             fetchPages(1, true);
         }
     }, [dbName, sortConfig, fetchPages]);
-
-    const loadMorePages = () => {
-        if (!isFetchingMore && hasMore) {
-            fetchPages(currentPage + 1, false);
-        }
-    };
 
     const handleSort = (key) => {
         let direction = 'ascending';
@@ -214,19 +225,13 @@ export default function ResultsPage() {
                         ))}
                     </tbody>
                 </table>
+                {/* Этот невидимый div будет отслеживаться IntersectionObserver, чтобы запустить загрузку */}
+                {/* Он не будет рендериться, если больше нет страниц, что остановит вызовы */}
+                {hasMore && <div ref={lastPageElementRef} style={{ height: '1px' }} />}
+                {/* Индикатор загрузки, который виден во время подгрузки */}
                 {isFetchingMore && (
                     <div className="text-center p-4">
                         <p className="text-gray-600">Загрузка...</p>
-                    </div>
-                )}
-                {hasMore && !loading && !isFetchingMore && (
-                    <div className="text-center p-4">
-                        <button
-                            onClick={loadMorePages}
-                            className="py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                        >
-                            Загрузить еще
-                        </button>
                     </div>
                 )}
             </div>
