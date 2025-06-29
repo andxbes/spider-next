@@ -82,6 +82,14 @@ function initSiteDb(siteName, overwrite = false) { // Переименовано
         // verbose: console.log 
     });
 
+    // Устанавливаем PRAGMA для повышения производительности.
+    // WAL (Write-Ahead Logging) позволяет одновременно читать и писать в БД, что идеально для нашего случая.
+    // Остальные настройки уменьшают количество обращений к диску, ускоряя запись.
+    siteDbInstance.exec('PRAGMA journal_mode = WAL;');
+    siteDbInstance.exec('PRAGMA synchronous = NORMAL;');
+    siteDbInstance.exec('PRAGMA cache_size = -64000;'); // ~64MB cache
+    siteDbInstance.exec('PRAGMA temp_store = MEMORY;');
+
     // ВНИМАНИЕ: Таблица sites_metadata удалена отсюда!
     siteDbInstance.exec(`
         CREATE TABLE IF NOT EXISTS pages (
@@ -109,6 +117,22 @@ function initSiteDb(siteName, overwrite = false) { // Переименовано
             sourceUrl TEXT NOT NULL, -- Примечание: это URL, НА который ведет ссылка (цель)
             FOREIGN KEY (pageId) REFERENCES pages(id) ON DELETE CASCADE
         );
+
+        -- === ИНДЕКСЫ ДЛЯ УСКОРЕНИЯ ===
+
+        -- Индексы для ускорения сортировки на странице результатов
+        CREATE INDEX IF NOT EXISTS idx_pages_responseStatus ON pages (responseStatus);
+        CREATE INDEX IF NOT EXISTS idx_pages_responseTime ON pages (responseTime);
+        -- Индексы для текстовых полей также могут помочь, но они могут быть большими
+        CREATE INDEX IF NOT EXISTS idx_pages_metaTitle ON pages (metaTitle);
+        CREATE INDEX IF NOT EXISTS idx_pages_metaDescription ON pages (metaDescription);
+        
+        -- Индексы для ускорения "JOIN-подобных" операций при выборке деталей страницы (заголовков и ссылок)
+        CREATE INDEX IF NOT EXISTS idx_headers_pageId ON headers (pageId);
+        CREATE INDEX IF NOT EXISTS idx_incoming_links_pageId ON incoming_links (pageId);
+
+        -- Индекс для ускорения поиска обнаруженных URL при возобновлении сканирования
+        CREATE INDEX IF NOT EXISTS idx_incoming_links_sourceUrl ON incoming_links (sourceUrl);
     `);
     console.log(`[DB] База данных сайта для ${siteName} инициализирована.`);
     return siteDbInstance; // Возвращаем новый экземпляр
