@@ -182,6 +182,9 @@ export default function ResultsPage() {
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Исходящие ссылки
                             </th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Входящие ссылки
+                            </th>
                         </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
@@ -223,6 +226,17 @@ export default function ResultsPage() {
                                             className="text-blue-600 hover:underline text-sm"
                                         >
                                             Посмотреть ({page.outgoingLinks.length})
+                                        </button>
+                                    ) : 'Нет'}
+                                </td>
+                                {/* Кнопка для Входящих ссылок */}
+                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
+                                    {page.incomingLinks && page.incomingLinks.length > 0 ? (
+                                        <button
+                                            onClick={() => openModal('Входящие ссылки (Источники)', page.incomingLinks)}
+                                            className="text-blue-600 hover:underline text-sm"
+                                        >
+                                            Посмотреть ({page.incomingLinks.length})
                                         </button>
                                     ) : 'Нет'}
                                 </td>

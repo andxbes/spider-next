@@ -2,7 +2,7 @@
 const cheerio = require('cheerio');
 const robots = require('robots-parser');
 const { URL } = require('url');
-const { initDb, savePageData, saveHeader, saveIncomingLink, getScannedUrls, getDiscoveredUrls } = require('./db');
+const { initDb, savePageData, saveHeader, saveOutgoingLink, getScannedUrls, getAllDestinationUrls } = require('./db');
 const { parentPort } = require('worker_threads');
 
 // НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ для отправки логов в родительский процесс
@@ -187,8 +187,8 @@ async function crawl() {
 
                                     // Проверяем, что ссылка ведет на тот же домен
                                     if (absoluteUrlParsed.hostname === domain) {
-                                        // Сохраняем входящую ссылку
-                                        saveIncomingLink(pageId, absoluteUrl);
+                                        // Сохраняем исходящую ссылку
+                                        saveOutgoingLink(pageId, absoluteUrl);
 
                                         // Добавляем URL в очередь, если он еще не был обработан и не находится в очереди
                                         if (!crawledUrls.has(absoluteUrl) && !urlsToCrawl.includes(absoluteUrl)) {
@@ -278,12 +278,12 @@ if (parentPort) {
                 logToParent('info', `[SPIDER_RESUME] Загружено ${crawledUrls.size} ранее обработанных URL.`);
 
                 // 2. Находим все ОБНАРУЖЕННЫЕ URL (на которые есть ссылки)
-                const discoveredUrls = getDiscoveredUrls(dbName);
+                const discoveredUrls = getAllDestinationUrls(dbName);
                 logToParent('info', `[SPIDER_RESUME] Найдено ${discoveredUrls.length} уникальных ссылок в базе.`);
 
                 // 3. Добавляем в очередь только те, которые еще не были обработаны
                 discoveredUrls.forEach(url => {
-                    if (!urlsToCrawl.includes(url)) {
+                    if (!crawledUrls.has(url) && !urlsToCrawl.includes(url)) {
                         urlsToCrawl.push(url);
                     }
                 });

@@ -111,10 +111,10 @@ function initSiteDb(siteName, overwrite = false) { // Переименовано
             FOREIGN KEY (pageId) REFERENCES pages(id) ON DELETE CASCADE
         );
 
-        CREATE TABLE IF NOT EXISTS incoming_links (
+        CREATE TABLE IF NOT EXISTS outgoing_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pageId INTEGER,
-            sourceUrl TEXT NOT NULL, -- Примечание: это URL, НА который ведет ссылка (цель)
+            destinationUrl TEXT NOT NULL, -- URL, на который ведет ссылка (цель)
             FOREIGN KEY (pageId) REFERENCES pages(id) ON DELETE CASCADE
         );
 
@@ -129,10 +129,10 @@ function initSiteDb(siteName, overwrite = false) { // Переименовано
         
         -- Индексы для ускорения "JOIN-подобных" операций при выборке деталей страницы (заголовков и ссылок)
         CREATE INDEX IF NOT EXISTS idx_headers_pageId ON headers (pageId);
-        CREATE INDEX IF NOT EXISTS idx_incoming_links_pageId ON incoming_links (pageId);
+        CREATE INDEX IF NOT EXISTS idx_outgoing_links_pageId ON outgoing_links (pageId);
 
         -- Индекс для ускорения поиска обнаруженных URL при возобновлении сканирования
-        CREATE INDEX IF NOT EXISTS idx_incoming_links_sourceUrl ON incoming_links (sourceUrl);
+        CREATE INDEX IF NOT EXISTS idx_outgoing_links_destinationUrl ON outgoing_links (destinationUrl);
     `);
     console.log(`[DB] База данных сайта для ${siteName} инициализирована.`);
     return siteDbInstance; // Возвращаем новый экземпляр
@@ -158,10 +158,10 @@ function saveHeader(pageId, type, value) {
     stmt.run(pageId, type, value);
 }
 
-function saveIncomingLink(pageId, sourceUrl) {
+function saveOutgoingLink(pageId, destinationUrl) {
     if (!siteDbInstance) return;
-    const stmt = siteDbInstance.prepare('INSERT OR IGNORE INTO incoming_links (pageId, sourceUrl) VALUES (?, ?)');
-    stmt.run(pageId, sourceUrl);
+    const stmt = siteDbInstance.prepare('INSERT OR IGNORE INTO outgoing_links (pageId, destinationUrl) VALUES (?, ?)');
+    stmt.run(pageId, destinationUrl);
 }
 
 function getAllScannedSites() {
@@ -237,20 +237,51 @@ function getAllPagesData(dbName, { limit = 100, page = 1, sortKey = 'url', sortD
         const pagesStmt = localSiteDb.prepare(pagesQuery);
         const pages = pagesStmt.all(limit, offset);
 
-        // Получаем заголовки и входящие ссылки для каждой страницы
-        const headersStmt = localSiteDb.prepare('SELECT type, value FROM headers WHERE pageId = ?');
-        const outgoingLinksStmt = localSiteDb.prepare('SELECT sourceUrl FROM incoming_links WHERE pageId = ?');
+        if (pages.length === 0) {
+            return { pages: [], total };
+        }
 
-        const pagesWithDetails = pages.map(page => {
-            const headers = headersStmt.all(page.id);
-            const outgoingLinks = outgoingLinksStmt.all(page.id).map(link => link.sourceUrl); // Извлекаем только URL
+        const pageIds = pages.map(p => p.id);
+        const pageUrls = pages.map(p => p.url);
+        const pageIdPlaceholders = pageIds.map(() => '?').join(',');
+        const pageUrlPlaceholders = pageUrls.map(() => '?').join(',');
 
-            return {
-                ...page,
-                headers,
-                outgoingLinks, // Технически, это исходящие ссылки
-            };
-        });
+        // 1. Получаем все заголовки для текущего набора страниц
+        const headersStmt = localSiteDb.prepare(`SELECT pageId, type, value FROM headers WHERE pageId IN (${pageIdPlaceholders})`);
+        const allHeaders = headersStmt.all(...pageIds);
+        const headersByPageId = allHeaders.reduce((acc, h) => {
+            (acc[h.pageId] = acc[h.pageId] || []).push({ type: h.type, value: h.value });
+            return acc;
+        }, {});
+
+        // 2. Получаем все ИСХОДЯЩИЕ ссылки для текущего набора страниц
+        const outgoingLinksStmt = localSiteDb.prepare(`SELECT pageId, destinationUrl FROM outgoing_links WHERE pageId IN (${pageIdPlaceholders})`);
+        const allOutgoingLinks = outgoingLinksStmt.all(...pageIds);
+        const outgoingLinksByPageId = allOutgoingLinks.reduce((acc, l) => {
+            (acc[l.pageId] = acc[l.pageId] || []).push(l.destinationUrl);
+            return acc;
+        }, {});
+
+        // 3. Получаем все ВХОДЯЩИЕ ссылки для текущего набора страниц
+        const incomingLinksStmt = localSiteDb.prepare(`
+            SELECT p.url as sourceUrl, ol.destinationUrl
+            FROM outgoing_links ol
+            JOIN pages p ON p.id = ol.pageId
+            WHERE ol.destinationUrl IN (${pageUrlPlaceholders})
+        `);
+        const allIncomingLinks = incomingLinksStmt.all(...pageUrls);
+        const incomingLinksByUrl = allIncomingLinks.reduce((acc, l) => {
+            (acc[l.destinationUrl] = acc[l.destinationUrl] || []).push(l.sourceUrl);
+            return acc;
+        }, {});
+
+        const pagesWithDetails = pages.map(page => ({
+            ...page,
+            headers: headersByPageId[page.id] || [],
+            outgoingLinks: outgoingLinksByPageId[page.id] || [],
+            incomingLinks: incomingLinksByUrl[page.url] || [],
+        }));
+
         return { pages: pagesWithDetails, total };
 
     } catch (error) {
@@ -295,7 +326,7 @@ function getScannedUrls(dbName) {
  * @param {string} dbName - Имя базы данных сайта.
  * @returns {string[]} Массив уникальных URL-адресов.
  */
-function getDiscoveredUrls(dbName) {
+function getAllDestinationUrls(dbName) {
     const dbPath = getSiteDbPath(dbName);
     if (!fs.existsSync(dbPath)) {
         return [];
@@ -304,8 +335,8 @@ function getDiscoveredUrls(dbName) {
     try {
         localSiteDb = new Database(dbPath, { readonly: true });
         // DISTINCT гарантирует, что мы получим только уникальные URL
-        const stmt = localSiteDb.prepare('SELECT DISTINCT sourceUrl FROM incoming_links');
-        return stmt.all().map(row => row.sourceUrl);
+        const stmt = localSiteDb.prepare('SELECT DISTINCT destinationUrl FROM outgoing_links');
+        return stmt.all().map(row => row.destinationUrl);
     } catch (error) {
         console.error(`[DB] Ошибка при получении обнаруженных URL-адресов из ${dbName}.db:`, error);
         return [];
@@ -322,10 +353,10 @@ module.exports = {
     initDb: initSiteDb,       // Экспортируем initSiteDb как initDb для совместимости
     savePageData,
     saveHeader,
-    saveIncomingLink,
+    saveOutgoingLink,
     getAllScannedSites,
     updateScanStatus,
     getAllPages: getAllPagesData, // Экспортируем getAllPagesData как getAllPages
     getScannedUrls,
-    getDiscoveredUrls,
+    getAllDestinationUrls,
 };
