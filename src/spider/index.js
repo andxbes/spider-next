@@ -47,6 +47,7 @@ let maxConcurrency = 5; // Количество одновременно ска�
 let activeCrawlers = 0;
 let totalUrlsFound = 0; // Для отслеживания общего количества найденных URL
 let processedUrlsCount = 0; // Для отслеживания количества обработанных URL
+let scanStartTime = 0; // Для расчета скорости сканирования
 
 
 /**
@@ -120,6 +121,9 @@ async function crawl() {
 
             // Отправляем прогресс в родительский процесс (API route)
             if (parentPort) {
+                const elapsedTimeInSeconds = (Date.now() - scanStartTime) / 1000;
+                const pagesPerSecond = elapsedTimeInSeconds > 0 ? (processedUrlsCount / elapsedTimeInSeconds).toFixed(2) : 0;
+
                 parentPort.postMessage({
                     type: 'progress',
                     dbName: dbName,
@@ -127,6 +131,9 @@ async function crawl() {
                     currentUrl: currentUrl,
                     totalUrls: totalUrlsFound,
                     scannedCount: processedUrlsCount,
+                    // Новые метрики
+                    activeCrawlers: activeCrawlers,
+                    pagesPerSecond: pagesPerSecond,
                 });
             }
             logToParent('info', `[SPIDER_QUEUE] Обработка: ${currentUrl} (Осталось в очереди: ${urlsToCrawl.length}, Активных: ${activeCrawlers})`);
@@ -243,6 +250,7 @@ if (parentPort) {
             activeCrawlers = 0;
             totalUrlsFound = 0;
             processedUrlsCount = 0;
+            scanStartTime = Date.now(); // Устанавливаем время начала сканирования
             robotsParser = undefined;
             dbName = '';
             baseUrl = '';

@@ -293,6 +293,15 @@ export default function HomePage() {
                     style={{ width: `${progressPercentage}%` }}
                   ></div>
                 </div>
+                {/* Новые метрики */}
+                <div className="flex justify-between text-sm text-blue-700 mt-3 pt-3 border-t border-blue-200">
+                  <span>
+                    Активных потоков: <strong>{scanStatus.progress.activeCrawlers ?? '...'} / {concurrency}</strong>
+                  </span>
+                  <span>
+                    Скорость: <strong>{scanStatus.progress.pagesPerSecond ?? '...'} стр/сек</strong>
+                  </span>
+                </div>
               </>
             ) : (
               // Сообщение, когда прогресс-объект еще не пришел, но сканирование pending/scanning
