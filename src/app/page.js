@@ -13,6 +13,7 @@ export default function HomePage() {
   // scanStatus теперь будет объектом, содержащим status, progress (который может быть null), и другие метаданды
   const [scanStatus, setScanStatus] = useState(null);
   const [scannedSites, setScannedSites] = useState([]); // Список ранее просканированных сайтов
+  const [isStopping, setIsStopping] = useState(null); // Имя БД сканирования, которое останавливается
   const [currentDbName, setCurrentDbName] = useState(null); // Имя БД текущего активного сканирования
   const router = useRouter();
 
@@ -148,6 +149,37 @@ export default function HomePage() {
     router.push(`/results/${dbName}`); // Переходим на страницу результатов
   };
 
+  // Обработчик для остановки сканирования
+  const handleStopScan = async (dbName) => {
+    if (!confirm(`Вы уверены, что хотите остановить сканирование для ${dbName}?`)) {
+      return;
+    }
+    setIsStopping(dbName);
+    try {
+      const res = await fetch(`/api/scan?dbName=${dbName}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.message || 'Не удалось остановить сканирование');
+      }
+      // Успех
+      alert('Сканирование успешно остановлено.');
+    } catch (error) {
+      console.error('Ошибка при остановке сканирования:', error);
+      alert(`Ошибка: ${error.message}`);
+    } finally {
+      setIsStopping(null);
+      fetchScannedSites(); // Обновляем список, чтобы показать новый статус
+    }
+  };
+
+  // Обработчик для возобновления сканирования (подготовка формы)
+  const handleResumeScan = (domain) => {
+    setUrl(`https://${domain}`); // Предполагаем https
+    setOverwrite(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   // Вычисляем процент прогресса для индикатора
   const progressPercentage = (scanStatus?.progress?.scannedCount && scanStatus?.progress?.totalUrls)
     ? (scanStatus.progress.scannedCount / scanStatus.progress.totalUrls) * 100
@@ -289,6 +321,7 @@ export default function HomePage() {
                 // Сайт считается неактивным (и результаты можно смотреть), если он завершен или произошла ошибка.
                 // Кнопка блокируется только если сканирование в статусе 'pending' или 'scanning'.
                 const isSiteActive = site.status === "pending" || site.status === "scanning";
+                const canBeResumed = ["completed", "error", "cancelled"].includes(site.status);
                 return (
                   <li
                     key={site.id}
@@ -316,22 +349,40 @@ export default function HomePage() {
                           Ошибка
                         </span>
                       )}
+                      {site.status === "cancelled" && (
+                        <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-gray-700 bg-gray-200 rounded-full">
+                          Отменено
+                        </span>
+                      )}
                       {site.status === "completed" && (
                         <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-green-700 bg-green-100 rounded-full">
                           Завершено
                         </span>
                       )}
                     </div>
-                    <button
-                      onClick={() => handleViewResults(site.dbName)}
-                      className={`py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white transition duration-200 ease-in-out ${isSiteActive
-                        ? "bg-gray-400 cursor-not-allowed"
-                        : "bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-                        }`}
-                      disabled={isSiteActive} // Кнопка доступна, если статус 'completed' или 'error'
-                    >
-                      Посмотреть Результаты
-                    </button>
+                    <div className="flex items-center space-x-2 mt-2 sm:mt-0">
+                      {isSiteActive ? (
+                        <button
+                          onClick={() => handleStopScan(site.dbName)}
+                          className={`py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white transition duration-200 ease-in-out ${isStopping === site.dbName ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'}`}
+                          disabled={isStopping === site.dbName || scanInProgress && site.dbName !== currentDbName}
+                        >
+                          {isStopping === site.dbName ? 'Остановка...' : 'Остановить'}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleViewResults(site.dbName)}
+                          className="py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700"
+                        >
+                          Результаты
+                        </button>
+                      )}
+                      {canBeResumed && (
+                        <button onClick={() => handleResumeScan(site.domain)} className="py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-blue-500 hover:bg-blue-600" disabled={scanInProgress}>
+                          Возобновить
+                        </button>
+                      )}
+                    </div>
                   </li>
                 );
               })}

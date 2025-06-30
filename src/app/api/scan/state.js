@@ -1,20 +1,20 @@
 // src/app/api/scan/state.js
-import { updateScanStatus, getAllScannedSites } from '@/spider/db';
+import { getAllScannedSites, updateScanStatus } from "../../../spider/db";
 
-// Общее состояние в памяти для всех API-роутов, которые импортируют этот модуль.
+/**
+ * Карта для хранения активных процессов сканирования.
+ * Ключ: dbName (домен сайта)
+ * Значение: { worker, status, progress, logs }
+ */
 export const scanProcesses = new Map();
 
 let staleScansCleaned = false;
 
-/**
- * Находит сканирования, которые были прерваны перезапуском сервера, и помечает их как 'error'.
- * Выполняется только один раз за время жизни процесса сервера.
- */
+// Функция для очистки "зависших" сканирований при старте сервера
 export function runStaleScansCleanup() {
     if (staleScansCleaned) {
         return;
     }
-
     console.log('[API_CLEANUP] Выполняется одноразовая проверка на зависшие сканирования...');
     try {
         const allSites = getAllScannedSites();

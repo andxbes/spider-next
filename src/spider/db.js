@@ -34,7 +34,7 @@ function getMetadataDbConnection() {
                 dbName TEXT UNIQUE NOT NULL,
                 domain TEXT NOT NULL,
                 scannedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-                status TEXT DEFAULT 'pending' -- pending, completed, error
+                status TEXT DEFAULT 'pending' -- pending, scanning, completed, error, cancelled
             );
         `);
         return metadataDbInstance;

@@ -2,171 +2,163 @@
 import { NextResponse } from 'next/server';
 import { Worker } from 'worker_threads';
 import path from 'path';
-import fs from 'fs';
-
-// Импортируем функции для работы с БД и общее состояние
-import { updateScanStatus, getAllScannedSites } from '@/spider/db';
+import { URL } from 'url';
 import { scanProcesses, runStaleScansCleanup } from './state';
+import { updateScanStatus } from '../../../spider/db';
 
-export async function POST(req) {
-    runStaleScansCleanup(); // Запускаем очистку при каждом запросе
-    const { url, overwrite, concurrency } = await req.json();
+// Запускаем очистку один раз при старте сервера
+runStaleScansCleanup();
 
-    if (!url) {
-        return NextResponse.json({ message: 'URL is required' }, { status: 400 });
-    }
-
-    let dbName;
+/**
+ * @description Запускает новый процесс сканирования
+ * @method POST
+ */
+export async function POST(request) {
     try {
-        dbName = new URL(url).hostname;
-    } catch (e) {
-        return NextResponse.json({ message: 'Invalid URL provided', error: e.message }, { status: 400 });
-    }
+        const { url, overwrite, concurrency } = await request.json();
 
-    // If a scan for this domain is already running, return its status
-    if (scanProcesses.has(dbName)) {
-        const existingProcess = scanProcesses.get(dbName);
-        return NextResponse.json({ message: `Scan for ${dbName} is already running.`, status: existingProcess.status || 'pending', progress: existingProcess.progress }, { status: 200 });
-    }
-
-    try {
-        // --- ИСПРАВЛЕНО ЗДЕСЬ: Более надежный способ определить путь к файлу воркера ---
-        const spiderPath = path.join(process.cwd(), 'src', 'spider', 'index.js');
-
-        // Check if the file actually exists before trying to create a worker
-        if (!fs.existsSync(spiderPath)) {
-            console.error(`[API] Worker script NOT FOUND at calculated path: ${spiderPath}`);
-            return NextResponse.json({ message: 'Worker script not found on server.', error: `Script not found: ${spiderPath}` }, { status: 500 });
+        if (!url) {
+            return NextResponse.json({ message: 'URL is required' }, { status: 400 });
         }
-        console.log(`[API] Launching Worker Thread from: ${spiderPath}`);
 
-        const worker = new Worker(spiderPath, {
-            stdout: true, // Redirect worker's console.log to main process stdout
-            stderr: true, // Redirect worker's console.error to main process stderr
-        });
+        let domain;
+        let dbName;
+        try {
+            const parsedUrl = new URL(url);
+            domain = parsedUrl.hostname;
+            dbName = domain; // Используем домен как имя БД
+        } catch (error) {
+            return NextResponse.json({ message: 'Invalid URL format' }, { status: 400 });
+        }
 
-        // Store process information
-        const currentScanningProcess = {
-            worker: worker,
+        if (scanProcesses.has(dbName)) {
+            return NextResponse.json({ message: `Scan for ${dbName} is already running.` }, { status: 409 }); // 409 Conflict
+        }
+
+        updateScanStatus(dbName, 'pending');
+
+        const worker = new Worker(path.resolve(process.cwd(), 'src/spider/index.js'));
+
+        scanProcesses.set(dbName, {
+            worker,
             status: 'pending',
-            progress: null, // Initialize progress as null
-            startTime: Date.now(),
-            dbName: dbName,
-            errorMessage: null, // To store worker-specific errors
-        };
-        scanProcesses.set(dbName, currentScanningProcess);
+            isStopping: false, // Флаг для корректной обработки отмены
+            progress: null,
+        });
 
-        // Handle messages from the worker
-        worker.on('message', (msg) => {
-            if (msg.type === 'log') {
-                // Выводим лог в консоль основного процесса с соответствующим уровнем
-                // Уровни 'info', 'warn', 'error' соответствуют методам console
-                const logFunction = console[msg.level] || console.log;
-                logFunction(`[WORKER] ${msg.message}`);
+        worker.on('message', (message) => {
+            const processInfo = scanProcesses.get(dbName);
+            if (!processInfo) return;
 
-            } else if (msg.type === 'progress') {
-                currentScanningProcess.status = 'scanning';
-                currentScanningProcess.progress = {
-                    message: msg.message,
-                    currentUrl: msg.currentUrl,
-                    totalUrls: msg.totalUrls,
-                    scannedCount: msg.scannedCount,
-                };
-                // console.log(`[API-PROGRESS] ${msg.message}`); // Optional: log progress
-            } else if (msg.type === 'completed') {
-                currentScanningProcess.status = 'completed';
-                updateScanStatus(msg.dbName, 'completed'); // Update metadata DB
-                console.log(`[API] Scan for ${msg.dbName} completed successfully.`);
-                // We might want to remove it from map after a delay or when UI no longer needs status
-                // For now, keep it for the GET /api/scan to return 'completed'
-                // setTimeout(() => scanProcesses.delete(msg.dbName), 5000);
-            } else if (msg.type === 'error') {
-                currentScanningProcess.status = 'error';
-                currentScanningProcess.errorMessage = msg.message;
-                updateScanStatus(msg.dbName, 'error'); // Update metadata DB
-                console.error(`[API] Error from scanner worker for ${msg.dbName}:`, msg.message);
-                // setTimeout(() => scanProcesses.delete(msg.dbName), 5000);
+            // Обновляем статус в БД на 'scanning' при первом сообщении о прогрессе
+            if (message.type === 'progress') {
+                if (processInfo.status === 'pending') {
+                    updateScanStatus(dbName, 'scanning');
+                }
+                processInfo.status = 'scanning';
+                processInfo.progress = message;
+            } else if (message.type === 'completed') {
+                console.log(`[API] Scan completed for ${dbName}`);
+                updateScanStatus(dbName, 'completed');
+                scanProcesses.delete(dbName); // <-- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ
+                worker.terminate();
+            } else if (message.type === 'error') {
+                console.error(`[API] Scan error for ${dbName}: ${message.message}`);
+                updateScanStatus(dbName, 'error');
+                scanProcesses.delete(dbName); // <-- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ
+                worker.terminate();
             }
         });
 
-        // Handle worker exit (completion or crash)
+        worker.on('error', (error) => {
+            const processInfo = scanProcesses.get(dbName);
+            if (processInfo && !processInfo.isStopping) {
+                console.error(`[API] Worker error for ${dbName}:`, error);
+                updateScanStatus(dbName, 'error');
+                scanProcesses.delete(dbName);
+            }
+        });
+
         worker.on('exit', (code) => {
-            console.log(`[API] Spider process for ${dbName} exited with code ${code}`);
-            if (code !== 0) {
-                currentScanningProcess.status = 'error';
-                currentScanningProcess.errorMessage = currentScanningProcess.errorMessage || `Worker exited with non-zero code: ${code}`;
-                updateScanStatus(dbName, 'error'); // Update metadata DB on exit error
-            } else if (currentScanningProcess.status === 'pending' || currentScanningProcess.status === 'scanning') {
-                // If worker exits with 0 but didn't send 'completed' message, it's an unexpected early exit
-                currentScanningProcess.status = 'error';
-                currentScanningProcess.errorMessage = currentScanningProcess.errorMessage || 'Worker exited unexpectedly before completion message.';
-                updateScanStatus(dbName, 'error'); // Update metadata DB on unexpected exit
+            const processInfo = scanProcesses.get(dbName);
+            // Если процесс еще отслеживается и не был помечен для остановки, это сбой.
+            if (processInfo && !processInfo.isStopping) {
+                if (code !== 0) {
+                    console.error(`[API] Worker for ${dbName} crashed with exit code ${code}`);
+                    updateScanStatus(dbName, 'error');
+                    scanProcesses.delete(dbName);
+                }
+            } else if (processInfo && processInfo.isStopping) {
+                // Если была отмена, просто удаляем из карты, статус уже установлен.
+                scanProcesses.delete(dbName);
             }
-            // You can delete it from the map here if you want it to be immediately restartable
-            // Or keep it for a while to let frontend fetch the final status/error
-            // scanProcesses.delete(dbName);
         });
 
-        // Handle errors in the worker thread itself (e.g., uncaught exceptions)
-        worker.on('error', (err) => {
-            currentScanningProcess.status = 'error';
-            currentScanningProcess.errorMessage = err.message;
-            updateScanStatus(dbName, 'error'); // Update metadata DB on worker error
-            console.error(`[API] Uncaught error in worker thread for ${dbName}:`, err);
-        });
+        worker.postMessage({ type: 'start', url, overwrite, concurrency });
 
-        // Send the initial 'start' message to the worker after setting up listeners
-        const numConcurrency = concurrency > 0 ? concurrency : 5; // По умолчанию 5, если не указано или неверно
-        worker.postMessage({ type: 'start', url: url, overwrite: overwrite, concurrency: numConcurrency });
-        updateScanStatus(dbName, 'pending'); // Set initial status in metadata DB
-
-        return NextResponse.json({ message: 'Scan initiated', dbName: dbName, status: 'pending' }, { status: 202 });
+        return NextResponse.json({ message: `Scan started for ${domain}`, dbName }, { status: 202 });
 
     } catch (error) {
-        console.error('[API] Error launching Worker Thread:', error);
-        return NextResponse.json({ message: 'Failed to launch scan', error: error.message }, { status: 500 });
+        console.error('[API_SCAN_POST] Error:', error);
+        return NextResponse.json({ message: 'An internal server error occurred.' }, { status: 500 });
     }
 }
 
-export async function GET(req) {
-    runStaleScansCleanup(); // Запускаем очистку и здесь
-    const url = new URL(req.url);
-    const dbName = url.searchParams.get('dbName');
+/**
+ * @description Получает статус текущего сканирования
+ * @method GET
+ */
+export async function GET(request) {
+    const { searchParams } = new URL(request.url);
+    const dbName = searchParams.get('dbName');
 
     if (!dbName) {
-        return NextResponse.json({ message: 'dbName is required' }, { status: 400 });
+        return NextResponse.json({ message: 'dbName query parameter is required' }, { status: 400 });
     }
 
     const processInfo = scanProcesses.get(dbName);
 
     if (processInfo) {
-        // Return current live status if process is active
-        return NextResponse.json({
-            status: processInfo.status,
-            progress: processInfo.progress, // Will be null initially, then updated by worker messages
-            startTime: processInfo.startTime,
-            errorMessage: processInfo.errorMessage,
-        }, { status: 200 });
+        return NextResponse.json({ status: processInfo.status, progress: processInfo.progress });
     } else {
-        // If process is not in memory, check if a database for it exists
-        // This suggests a previous scan completed or wasn't launched via this server instance.
-        // We'll rely on sites_metadata table for definitive status
-        const allSites = getAllScannedSites();
-        const siteMetadata = allSites.find(site => site.dbName === dbName);
+        // Процесс не в памяти, значит он завершен или была ошибка.
+        // Клиент получит финальный статус через /api/sites
+        return NextResponse.json({ status: 'completed', progress: null });
+    }
+}
 
-        if (siteMetadata) {
-            return NextResponse.json({
-                status: siteMetadata.status,
-                progress: null, // No live progress if not active
-                message: `Scan status from database: ${siteMetadata.status}`,
-            }, { status: 200 });
-        } else {
-            // If no active process and no metadata, then it's idle
-            return NextResponse.json({
-                status: 'idle',
-                progress: null,
-                message: 'No active scan for this domain, and no metadata found.',
-            }, { status: 200 });
-        }
+/**
+ * @description Останавливает (отменяет) активный процесс сканирования
+ * @method DELETE
+ */
+export async function DELETE(request) {
+    const { searchParams } = new URL(request.url);
+    const dbName = searchParams.get('dbName');
+
+    if (!dbName) {
+        return NextResponse.json({ message: 'dbName query parameter is required' }, { status: 400 });
+    }
+
+    const processInfo = scanProcesses.get(dbName);
+
+    if (!processInfo) {
+        return NextResponse.json({ message: `Scan for ${dbName} is not running.` }, { status: 404 });
+    }
+
+    try {
+        console.log(`[API] Stopping scan for ${dbName}...`);
+        processInfo.isStopping = true; // Помечаем, что остановка преднамеренная
+        await processInfo.worker.terminate(); // Завершаем воркер
+        console.log(`[API] Worker for ${dbName} terminated.`);
+
+        updateScanStatus(dbName, 'cancelled'); // Устанавливаем статус "Отменено"
+        scanProcesses.delete(dbName); // Удаляем из активных процессов
+
+        return NextResponse.json({ message: `Scan for ${dbName} has been cancelled.` }, { status: 200 });
+    } catch (error) {
+        console.error(`[API] Error stopping worker for ${dbName}:`, error);
+        updateScanStatus(dbName, 'error');
+        scanProcesses.delete(dbName);
+        return NextResponse.json({ message: 'An error occurred while stopping the scan.' }, { status: 500 });
     }
 }
