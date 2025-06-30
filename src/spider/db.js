@@ -215,9 +215,11 @@ function updateScanStatus(dbName, status, startUrl = null) {
  * @param {number} options.page - Номер страницы.
  * @param {string} options.sortKey - Ключ для сортировки.
  * @param {string} options.sortDirection - Направление сортировки ('ascending' или 'descending').
+ * @param {string} [options.searchQuery] - Строка для поиска по URL, metaTitle, metaDescription.
+ * @param {string} [options.contentType] - Фильтр по типу контента.
  * @returns {{pages: Array<Object>, total: number}} Объект с массивом страниц и общим количеством.
  */
-function getAllPagesData(dbName, { limit = 100, page = 1, sortKey = 'url', sortDirection = 'ascending' } = {}) {
+function getAllPagesData(dbName, { limit = 100, page = 1, sortKey = 'url', sortDirection = 'ascending', searchQuery = '', contentType = '' } = {}) {
     const dbPath = getSiteDbPath(dbName);
     if (!fs.existsSync(dbPath)) {
         console.warn(`[DB] База данных сайта не найдена для: ${dbName} по пути ${dbPath}`);
@@ -236,20 +238,39 @@ function getAllPagesData(dbName, { limit = 100, page = 1, sortKey = 'url', sortD
     try {
         localSiteDb = new Database(dbPath, { readonly: true });
 
-        // Сначала получаем общее количество страниц
-        const totalStmt = localSiteDb.prepare('SELECT COUNT(*) as count FROM pages');
-        const totalResult = totalStmt.get();
+        // --- Динамическое построение WHERE и параметров ---
+        const whereClauses = [];
+        const queryParams = [];
+
+        if (searchQuery) {
+            whereClauses.push(`(url LIKE ? OR metaTitle LIKE ? OR metaDescription LIKE ?)`);
+            const searchTerm = `%${searchQuery}%`;
+            queryParams.push(searchTerm, searchTerm, searchTerm);
+        }
+
+        if (contentType) {
+            whereClauses.push(`contentType = ?`);
+            queryParams.push(contentType);
+        }
+
+        const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+        // Сначала получаем общее количество страниц с учетом фильтров
+        const totalQuery = `SELECT COUNT(*) as count FROM pages ${whereString}`;
+        const totalStmt = localSiteDb.prepare(totalQuery);
+        const totalResult = totalStmt.get(...queryParams);
         const total = totalResult.count;
 
-        // Затем получаем пагинированный и отсортированный список
+        // Затем получаем пагинированный и отсортированный список с учетом фильтров
         const pagesQuery = `
             SELECT id, url, metaTitle, metaDescription, scannedAt, contentType, responseStatus, responseTime 
             FROM pages 
+            ${whereString}
             ORDER BY ${safeSortKey} ${safeSortDirection}
             LIMIT ? OFFSET ?
         `;
         const pagesStmt = localSiteDb.prepare(pagesQuery);
-        const pages = pagesStmt.all(limit, offset);
+        const pages = pagesStmt.all(...queryParams, limit, offset);
 
         if (pages.length === 0) {
             return { pages: [], total };

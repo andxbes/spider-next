@@ -19,6 +19,10 @@ export default function ResultsPage() {
     const [sortConfig, setSortConfig] = useState({ key: 'url', direction: 'ascending' });
     const [currentPage, setCurrentPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
+    const [searchQuery, setSearchQuery] = useState(''); // Debounced search query
+    const [searchInput, setSearchInput] = useState(''); // Immediate input value
+    const [contentType, setContentType] = useState(''); // Content type filter
+    const [totalCount, setTotalCount] = useState(0); // Общее количество найденных страниц
 
     // Ref для IntersectionObserver
     const observer = useRef();
@@ -31,13 +35,22 @@ export default function ResultsPage() {
         setError(null);
 
         try {
-            const res = await fetch(`/api/data/${dbName}?page=${pageToFetch}&limit=${PAGE_SIZE}&sortKey=${sortConfig.key}&sortDirection=${sortConfig.direction}`);
+            const params = new URLSearchParams({
+                page: pageToFetch,
+                limit: PAGE_SIZE,
+                sortKey: sortConfig.key,
+                sortDirection: sortConfig.direction,
+                searchQuery: searchQuery, // Используем debounced значение
+                contentType: contentType,
+            });
+            const res = await fetch(`/api/data/${dbName}?${params.toString()}`);
             if (!res.ok) {
                 throw new Error(`HTTP ошибка! Статус: ${res.status}`);
             }
             const { pages: newPages, total } = await res.json();
 
             setPages(prevPages => (shouldReset ? newPages : [...prevPages, ...newPages]));
+            setTotalCount(total); // Обновляем общее количество
             setCurrentPage(pageToFetch);
             setHasMore((pageToFetch * PAGE_SIZE) < total);
 
@@ -47,7 +60,18 @@ export default function ResultsPage() {
         } finally {
             stateSetter(false);
         }
-    }, [dbName, sortConfig.key, sortConfig.direction]);
+    }, [dbName, sortConfig.key, sortConfig.direction, searchQuery, contentType]);
+
+    // Debounce search input
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setSearchQuery(searchInput);
+        }, 500); // 500ms delay
+
+        return () => {
+            clearTimeout(timer);
+        };
+    }, [searchInput]);
 
     const lastPageElementRef = useCallback(node => {
         if (isFetchingMore) return; // Не пересоздаем наблюдатель во время загрузки
@@ -66,17 +90,15 @@ export default function ResultsPage() {
     const [modalContent, setModalContent] = useState({ title: '', data: [] });
 
 
-
-    // Начальная загрузка и загрузка при изменении сортировки
+    // Начальная загрузка и загрузка при изменении сортировки, поиска или фильтра
     useEffect(() => {
         if (dbName) {
-            // Сбрасываем состояние перед загрузкой новых отсортированных данных
             setPages([]);
             setCurrentPage(1);
             setHasMore(true);
             fetchPages(1, true);
         }
-    }, [dbName, sortConfig, fetchPages]);
+    }, [dbName, sortConfig, searchQuery, contentType, fetchPages]);
 
     const handleSort = (key) => {
         let direction = 'ascending';
@@ -122,15 +144,6 @@ export default function ResultsPage() {
         );
     }
 
-    if (pages.length === 0) {
-        return (
-            <div className="container mx-auto p-4 text-center">
-                <h1 className="text-3xl font-bold mb-6 text-gray-800">Результаты для &quot;{dbName}&quot;</h1>
-                <p className="text-xl text-gray-600">Страницы не найдены для этого домена.</p>
-            </div>
-        );
-    }
-
     return (
         <div className="container mx-auto p-4 max-w-full font-sans">
             <div className='flex justify-between items-center mb-8 '>
@@ -142,115 +155,153 @@ export default function ResultsPage() {
                 </h1>
             </div>
             <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100 overflow-x-auto">
-                <table className="min-w-max divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                        <tr>
-                            <th
-                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                                onClick={() => handleSort('url')}
-                            >
-                                URL {getSortIndicator('url')}
-                            </th>
-                            <th
-                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                                onClick={() => handleSort('metaTitle')}
-                            >
-                                Заголовок (Meta Title) {getSortIndicator('metaTitle')}
-                            </th>
-                            <th
-                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                                onClick={() => handleSort('metaDescription')}
-                            >
-                                Описание (Meta Description) {getSortIndicator('metaDescription')}
-                            </th>
-                            <th
-                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                                onClick={() => handleSort('responseStatus')}
-                            >
-                                Статус {getSortIndicator('responseStatus')}
-                            </th>
-                            <th
-                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                                onClick={() => handleSort('responseTime')}
-                            >
-                                Время ответа (мс) {getSortIndicator('responseTime')}
-                            </th>
-                            {/* Изменяем заголовки для модального окна */}
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                H1-H6
-                            </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Исходящие ссылки
-                            </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Входящие ссылки
-                            </th>
-                        </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                        {pages.map((page) => (
-                            <tr key={page.id}>
-                                <td className="px-6 py-4 whitespace-normal text-sm font-medium text-blue-600 hover:underline break-words max-w-[300px]">
-                                    <a href={page.url} target="_blank" rel="noopener noreferrer">
-                                        {page.url}
-                                    </a>
-                                </td>
-                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800 break-words max-w-xs">
-                                    {page.metaTitle || 'N/A'}
-                                </td>
-                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800 break-words max-w-xs">
-                                    {page.metaDescription || 'N/A'}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">
-                                    {page.responseStatus !== null ? page.responseStatus : 'N/A'}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">
-                                    {page.responseTime !== null ? page.responseTime : 'N/A'}
-                                </td>
-                                {/* Кнопка для Заголовков */}
-                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
-                                    {page.headers && page.headers.length > 0 ? (
-                                        <button
-                                            onClick={() => openModal('Заголовки (H1-H6)', page.headers.map(h => ({ type: h.type.toUpperCase(), value: h.value })))}
-                                            className="text-blue-600 hover:underline text-sm"
-                                        >
-                                            Посмотреть ({page.headers.length})
-                                        </button>
-                                    ) : 'Нет'}
-                                </td>
-                                {/* Кнопка для Входящих ссылок */}
-                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
-                                    {page.outgoingLinks && page.outgoingLinks.length > 0 ? (
-                                        <button
-                                            onClick={() => openModal('Исходящие ссылки', page.outgoingLinks)}
-                                            className="text-blue-600 hover:underline text-sm"
-                                        >
-                                            Посмотреть ({page.outgoingLinks.length})
-                                        </button>
-                                    ) : 'Нет'}
-                                </td>
-                                {/* Кнопка для Входящих ссылок */}
-                                <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
-                                    {page.incomingLinks && page.incomingLinks.length > 0 ? (
-                                        <button
-                                            onClick={() => openModal('Входящие ссылки (Источники)', page.incomingLinks)}
-                                            className="text-blue-600 hover:underline text-sm"
-                                        >
-                                            Посмотреть ({page.incomingLinks.length})
-                                        </button>
-                                    ) : 'Нет'}
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-                {/* Этот невидимый div будет отслеживаться IntersectionObserver, чтобы запустить загрузку */}
-                {/* Он не будет рендериться, если больше нет страниц, что остановит вызовы */}
-                {hasMore && <div ref={lastPageElementRef} style={{ height: '1px' }} />}
-                {/* Индикатор загрузки, который виден во время подгрузки */}
-                {isFetchingMore && (
-                    <div className="text-center p-4">
-                        <p className="text-gray-600">Загрузка...</p>
+                {/* Панель поиска и фильтрации */}
+                <div className="flex flex-col sm:flex-row justify-between items-center mb-6 space-y-4 sm:space-y-0">
+                    <div className="flex-grow w-full sm:w-auto sm:mr-4">
+                        <input
+                            type="text"
+                            placeholder="Поиск по URL, Title, Description..."
+                            value={searchInput}
+                            onChange={(e) => setSearchInput(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-lg text-gray-700 focus:ring-blue-500 focus:border-blue-500 transition"
+                        />
+                    </div>
+                    <div className="w-full sm:w-auto">
+                        <select
+                            value={contentType}
+                            onChange={(e) => setContentType(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-lg text-gray-700 bg-white focus:ring-blue-500 focus:border-blue-500 transition"
+                        >
+                            <option value="">Все типы контента</option>
+                            <option value="HTML_PAGE">HTML страницы</option>
+                            <option value="NON_HTML_OR_ERROR">Не HTML / Ошибки</option>
+                            <option value="DISALLOWED">Запрещено robots.txt</option>
+                            <option value="INTERNAL_ERROR">Внутренние ошибки</option>
+                        </select>
+                    </div>
+                </div>
+                {/* Счетчик результатов */}
+                <div className="mb-4 text-sm text-gray-600">
+                    Найдено страниц: <span className="font-bold">{totalCount}</span>
+                </div>
+
+                {pages.length > 0 ? (
+                    <>
+                        <table className="min-w-max divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th
+                                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                        onClick={() => handleSort('url')}
+                                    >
+                                        URL {getSortIndicator('url')}
+                                    </th>
+                                    <th
+                                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                        onClick={() => handleSort('metaTitle')}
+                                    >
+                                        Заголовок (Meta Title) {getSortIndicator('metaTitle')}
+                                    </th>
+                                    <th
+                                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                        onClick={() => handleSort('metaDescription')}
+                                    >
+                                        Описание (Meta Description) {getSortIndicator('metaDescription')}
+                                    </th>
+                                    <th
+                                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                        onClick={() => handleSort('responseStatus')}
+                                    >
+                                        Статус {getSortIndicator('responseStatus')}
+                                    </th>
+                                    <th
+                                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                        onClick={() => handleSort('responseTime')}
+                                    >
+                                        Время ответа (мс) {getSortIndicator('responseTime')}
+                                    </th>
+                                    {/* Изменяем заголовки для модального окна */}
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        H1-H6
+                                    </th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Исходящие ссылки
+                                    </th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Входящие ссылки
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                                {pages.map((page) => (
+                                    <tr key={page.id}>
+                                        <td className="px-6 py-4 whitespace-normal text-sm font-medium text-blue-600 hover:underline break-words max-w-[300px]">
+                                            <a href={page.url} target="_blank" rel="noopener noreferrer">
+                                                {page.url}
+                                            </a>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-normal text-sm text-gray-800 break-words max-w-xs">
+                                            {page.metaTitle || 'N/A'}
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-normal text-sm text-gray-800 break-words max-w-xs">
+                                            {page.metaDescription || 'N/A'}
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">
+                                            {page.responseStatus !== null ? page.responseStatus : 'N/A'}
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">
+                                            {page.responseTime !== null ? page.responseTime : 'N/A'}
+                                        </td>
+                                        {/* Кнопка для Заголовков */}
+                                        <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
+                                            {page.headers && page.headers.length > 0 ? (
+                                                <button
+                                                    onClick={() => openModal('Заголовки (H1-H6)', page.headers.map(h => ({ type: h.type.toUpperCase(), value: h.value })))}
+                                                    className="text-blue-600 hover:underline text-sm"
+                                                >
+                                                    Посмотреть ({page.headers.length})
+                                                </button>
+                                            ) : 'Нет'}
+                                        </td>
+                                        {/* Кнопка для Входящих ссылок */}
+                                        <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
+                                            {page.outgoingLinks && page.outgoingLinks.length > 0 ? (
+                                                <button
+                                                    onClick={() => openModal('Исходящие ссылки', page.outgoingLinks)}
+                                                    className="text-blue-600 hover:underline text-sm"
+                                                >
+                                                    Посмотреть ({page.outgoingLinks.length})
+                                                </button>
+                                            ) : 'Нет'}
+                                        </td>
+                                        {/* Кнопка для Входящих ссылок */}
+                                        <td className="px-6 py-4 whitespace-normal text-sm text-gray-800">
+                                            {page.incomingLinks && page.incomingLinks.length > 0 ? (
+                                                <button
+                                                    onClick={() => openModal('Входящие ссылки (Источники)', page.incomingLinks)}
+                                                    className="text-blue-600 hover:underline text-sm"
+                                                >
+                                                    Посмотреть ({page.incomingLinks.length})
+                                                </button>
+                                            ) : 'Нет'}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        {/* Этот невидимый div будет отслеживаться IntersectionObserver, чтобы запустить загрузку */}
+                        {/* Он не будет рендериться, если больше нет страниц, что остановит вызовы */}
+                        {hasMore && <div ref={lastPageElementRef} style={{ height: '1px' }} />}
+                        {/* Индикатор загрузки, который виден во время подгрузки */}
+                        {isFetchingMore && (
+                            <div className="text-center p-4">
+                                <p className="text-gray-600">Загрузка...</p>
+                            </div>
+                        )}
+                    </>
+                ) : (
+                    <div className="text-center py-10">
+                        <p className="text-xl text-gray-600">Страницы, соответствующие вашему запросу, не найдены.</p>
                     </div>
                 )}
             </div>
@@ -277,6 +328,6 @@ export default function ResultsPage() {
                     <p>Нет да нных для отображения.</p>
                 )}
             </Modal>
-        </div>
+        </div >
     );
 }

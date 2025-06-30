@@ -15,10 +15,13 @@ export async function GET(req, { params }) {
     const limit = parseInt(searchParams.get('limit') || '100', 10);
     const sortKey = searchParams.get('sortKey') || 'url';
     const sortDirection = searchParams.get('sortDirection') || 'ascending';
+    // Получаем новые параметры для поиска и фильтрации
+    const searchQuery = searchParams.get('searchQuery') || '';
+    const contentType = searchParams.get('contentType') || '';
 
     try {
-        // Передаем параметры в функцию БД
-        const { pages, total } = getAllPages(dbName, { page, limit, sortKey, sortDirection });
+        // Передаем все параметры, включая новые, в функцию БД
+        const { pages, total } = getAllPages(dbName, { page, limit, sortKey, sortDirection, searchQuery, contentType });
         // Возвращаем данные вместе с общим количеством
         return NextResponse.json({ pages, total });
     } catch (error) {
