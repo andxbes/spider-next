@@ -33,6 +33,7 @@ function getMetadataDbConnection() {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 dbName TEXT UNIQUE NOT NULL,
                 domain TEXT NOT NULL,
+                startUrl TEXT, -- The full URL used to start the scan
                 scannedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
                 status TEXT DEFAULT 'pending' -- pending, scanning, completed, error, cancelled
             );
@@ -176,17 +177,29 @@ function getAllScannedSites() {
     }
 }
 
-function updateScanStatus(dbName, status) {
+function updateScanStatus(dbName, status, startUrl = null) {
     try {
         const metadataDb = getMetadataDbConnection();
-        const stmt = metadataDb.prepare(`
-            INSERT INTO sites_metadata (dbName, domain, status)
-            VALUES (?, ?, ?)
-            ON CONFLICT(dbName) DO UPDATE SET
-                status = EXCLUDED.status,
-                scannedAt = CURRENT_TIMESTAMP;
-        `);
-        stmt.run(dbName, dbName, status); // Предполагается, что dbName также является доменным именем
+        // Если предоставлен startUrl, это начало нового или возобновленного сканирования.
+        // Мы создаем или обновляем запись со всеми деталями.
+        if (startUrl) {
+            const domain = new URL(startUrl).hostname;
+            const stmt = metadataDb.prepare(`
+                INSERT INTO sites_metadata (dbName, domain, startUrl, status)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(dbName) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    startUrl = EXCLUDED.startUrl,
+                    scannedAt = CURRENT_TIMESTAMP;
+            `);
+            stmt.run(dbName, domain, startUrl, status);
+        } else {
+            // Если startUrl не предоставлен, мы обновляем только статус и временную метку существующей записи.
+            const stmt = metadataDb.prepare(`
+                UPDATE sites_metadata SET status = ?, scannedAt = CURRENT_TIMESTAMP WHERE dbName = ?;
+            `);
+            stmt.run(status, dbName);
+        }
         console.log(`[DB] Обновлен статус для ${dbName} на: ${status} в ${METADATA_DB_FILE_NAME}`);
     } catch (error) {
         console.error(`[DB_UPDATE_STATUS] Ошибка при обновлении статуса для ${dbName} в базе данных метаданных:`, error);

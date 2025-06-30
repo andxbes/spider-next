@@ -175,8 +175,8 @@ export default function HomePage() {
   };
 
   // Обработчик для возобновления сканирования (подготовка формы)
-  const handleResumeScan = (domain) => {
-    setUrl(`https://${domain}`); // Предполагаем https
+  const handleResumeScan = (startUrl, domain) => {
+    setUrl(startUrl || `https://${domain}`); // Используем сохраненный URL, если он есть, иначе - старая логика
     setOverwrite(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -378,7 +378,7 @@ export default function HomePage() {
                         </button>
                       )}
                       {canBeResumed && (
-                        <button onClick={() => handleResumeScan(site.domain)} className="py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-blue-500 hover:bg-blue-600" disabled={scanInProgress}>
+                        <button onClick={() => handleResumeScan(site.startUrl, site.domain)} className="py-2 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-blue-500 hover:bg-blue-600" disabled={scanInProgress}>
                           Возобновить
                         </button>
                       )}
