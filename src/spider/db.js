@@ -115,7 +115,8 @@ function initSiteDb(siteName, overwrite = false) { // Переименовано
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pageId INTEGER,
             destinationUrl TEXT NOT NULL, -- URL, на который ведет ссылка (цель)
-            FOREIGN KEY (pageId) REFERENCES pages(id) ON DELETE CASCADE
+            FOREIGN KEY (pageId) REFERENCES pages(id) ON DELETE CASCADE,
+            UNIQUE(pageId, destinationUrl)
         );
 
         -- === ИНДЕКСЫ ДЛЯ УСКОРЕНИЯ ===
@@ -278,8 +279,8 @@ function getAllPagesData(dbName, { limit = 100, page = 1, sortKey = 'url', sortD
         const pagesWithDetails = pages.map(page => ({
             ...page,
             headers: headersByPageId[page.id] || [],
-            outgoingLinks: outgoingLinksByPageId[page.id] || [],
-            incomingLinks: incomingLinksByUrl[page.url] || [],
+            outgoingLinks: [...new Set(outgoingLinksByPageId[page.id] || [])],
+            incomingLinks: [...new Set(incomingLinksByUrl[page.url] || [])],
         }));
 
         return { pages: pagesWithDetails, total };
